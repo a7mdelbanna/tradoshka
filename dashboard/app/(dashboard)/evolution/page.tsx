@@ -312,7 +312,7 @@ function TimelineFeed({ events }: { events: TimelineEvent[] }) {
   }
 
   return (
-    <div className="space-y-2 max-h-[420px] overflow-y-auto premium-scrollbar pr-1">
+    <div className="space-y-2 overflow-y-auto premium-scrollbar pr-1" style={{ maxHeight: "calc(100vh - 300px)" }}>
       {events.map((ev, i) => {
         const isKilled = ev.type === "KILLED";
         const isSpawned = ev.type === "SPAWNED";
@@ -618,7 +618,7 @@ export default function EvolutionPage() {
           </div>
 
           {/* Timeline */}
-          <div className="lg:col-span-4 bg-slate-900/60 border border-slate-800/50 rounded-2xl backdrop-blur-sm p-6">
+          <div className="lg:col-span-4 bg-slate-900/60 border border-slate-800/50 rounded-2xl backdrop-blur-sm p-6 lg:sticky lg:top-4 lg:self-start">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
                 <span className="w-1 h-4 rounded-full bg-gradient-to-b from-purple-400 to-blue-500" />
