@@ -15,6 +15,7 @@ pub mod position_monitor;
 pub mod strategy_tier;
 pub mod mutation;
 pub mod strategy_wallet;
+pub mod evolution;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -33,3 +34,4 @@ pub use position_monitor::{PositionMonitor, PositionCheck, PositionAction};
 pub use strategy_tier::{StrategyTierTracker, Tier};
 pub use mutation::{StrategyParams, MutationResult, mutate, initial_strategies};
 pub use strategy_wallet::{StrategyWalletManager, StrategySlot, SlotStatus};
+pub use evolution::{EvolutionEngine, EvolutionEvent, EvolutionAction, EvolutionReport};
