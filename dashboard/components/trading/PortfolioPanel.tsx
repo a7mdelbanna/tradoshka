@@ -207,6 +207,13 @@ function PerpPositionCard({ position }: { position: PerpPositionInfo }) {
           <span className="text-slate-500 truncate">{position.strategy}</span>
         )}
       </div>
+
+      {/* Stop management note */}
+      <div className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-700/30 border border-slate-600/20">
+        <span className="text-[9px] text-slate-500">
+          🛡 Stops managed by position monitor — see trade cards for levels
+        </span>
+      </div>
     </div>
   );
 }

@@ -93,6 +93,15 @@ export interface TradeInfo {
   pnl: string | null;
   closed: boolean;
   market?: string;
+  thesis_reasoning?: string;
+  stop_loss?: string;
+  trailing_stop?: string;
+  take_profit?: string;
+  time_stop_hours?: number;
+  risk_amount?: string;
+  reward_risk_ratio?: number;
+  strategy_tier?: string;
+  close_reason?: string | null;
 }
 
 export interface ReadinessResponse {
