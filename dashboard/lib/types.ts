@@ -51,3 +51,74 @@ export interface Stats {
   total_trades: number;
   recovery_factor: number;
 }
+
+export interface WalletResponse {
+  mode: string;
+  balance: string;
+  equity: string;
+  unrealized_pnl: string;
+  realized_pnl: string;
+  drawdown_pct: string;
+  total_fees: string;
+  open_positions: number;
+  positions: WalletPositionInfo[];
+}
+
+export interface WalletPositionInfo {
+  token_id: string;
+  question: string;
+  outcome: string;
+  side: string;
+  shares: string;
+  avg_price: string;
+  current_price: string;
+  unrealized_pnl: string;
+  strategy: string;
+}
+
+export interface TradeInfo {
+  id: string;
+  timestamp: string;
+  symbol: string;
+  question: string;
+  direction: string;
+  side: string;
+  shares: string;
+  price: string;
+  fee: string;
+  strategy: string;
+  strength: number;
+  edge: number;
+  pnl: string | null;
+  closed: boolean;
+}
+
+export interface ReadinessResponse {
+  criteria: ReadinessCriterion[];
+  passed: number;
+  total: number;
+  is_ready: boolean;
+}
+
+export interface ReadinessCriterion {
+  name: string;
+  threshold: string;
+  current_value: string;
+  passed: boolean;
+}
+
+export interface OrchestratorStatus {
+  cycle_count: number;
+  last_cycle_at: string | null;
+  wallet_mode: string;
+  tracked_markets: number;
+  open_positions: number;
+}
+
+export interface CycleResult {
+  cycle: number;
+  markets_evaluated: number;
+  signals_generated: number;
+  trades_executed: number;
+  trades: object[];
+}
