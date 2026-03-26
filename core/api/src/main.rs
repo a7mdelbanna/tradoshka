@@ -26,10 +26,23 @@ async fn run_trading_loop(state: SharedState) {
 
     let mut scan_ticker = interval(scan_interval);
     let mut cycle_ticker = interval(cycle_interval);
+    let mut evolution_ticker = interval(Duration::from_secs(60 * 60)); // 1 hour
     scan_ticker.tick().await;
 
     loop {
         tokio::select! {
+            _ = evolution_ticker.tick() => {
+                let mut s = state.write().await;
+                let evolution_engine: *mut tradoshka_engine::EvolutionEngine = &mut s.evolution_engine;
+                let strategy_manager: *mut tradoshka_engine::StrategyWalletManager = &mut s.strategy_manager;
+                // SAFETY: evolution_engine and strategy_manager are disjoint fields of AppState.
+                let report = unsafe { (*evolution_engine).evolve(&mut *strategy_manager) };
+                tracing::info!(
+                    "EVOLUTION hour {}: killed {}, spawned {}, alive {}, dead {}",
+                    report.hour, report.killed.len(), report.spawned.len(),
+                    report.alive_count, report.dead_count
+                );
+            }
             _ = scan_ticker.tick() => {
                 let mut s = state.write().await;
                 let markets = s.market_data.scan_markets().await;

@@ -3,6 +3,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::routes;
+use crate::evolution_routes;
 use crate::state::SharedState;
 use crate::ws::ws_handler;
 use crate::trading_ws;
@@ -32,6 +33,12 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/orchestrator", get(routes::get_orchestrator_status))
         .route("/api/orchestrator/cycle", post(routes::trigger_cycle))
         .route("/api/orchestrator/scan", post(routes::trigger_scan))
+        .route("/api/evolution/leaderboard", get(evolution_routes::get_leaderboard))
+        .route("/api/evolution/timeline", get(evolution_routes::get_timeline))
+        .route("/api/evolution/graveyard", get(evolution_routes::get_graveyard))
+        .route("/api/evolution/stats", get(evolution_routes::get_evolution_stats))
+        .route("/api/evolution/trigger", post(evolution_routes::trigger_evolution))
+        .route("/api/evolution/wallet/{name}", get(evolution_routes::get_strategy_wallet))
         .route("/ws", get(ws_handler))
         .route("/ws/trading", get(trading_ws::trading_ws_handler))
         .layer(CorsLayer::permissive())

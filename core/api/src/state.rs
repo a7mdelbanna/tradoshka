@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService, PerpWallet};
+use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService, PerpWallet, StrategyWalletManager, EvolutionEngine};
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
 use tradoshka_crypto::adapter::CryptoAdapter;
@@ -35,6 +35,8 @@ pub struct AppState {
     pub market_data: MarketDataService,
     pub orchestrator: Orchestrator,
     pub crypto_data: CryptoDataService,
+    pub strategy_manager: StrategyWalletManager,
+    pub evolution_engine: EvolutionEngine,
 }
 
 impl AppState {
@@ -61,6 +63,12 @@ impl AppState {
             market_data: MarketDataService::new(MarketDataConfig::default()),
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),
             crypto_data: CryptoDataService::new(),
+            strategy_manager: {
+                let mut strategy_manager = StrategyWalletManager::new(30, 10, dec!(100));
+                strategy_manager.initialize_defaults();
+                strategy_manager
+            },
+            evolution_engine: EvolutionEngine::new(),
         }
     }
 
