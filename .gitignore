@@ -1,0 +1,41 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node / Dashboard
+node_modules/
+.next/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trading specific - NEVER commit
+api_keys.json
+credentials.json
+secrets/

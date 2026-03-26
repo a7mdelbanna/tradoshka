@@ -1,0 +1,18 @@
+[package]
+name = "tradoshka-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tradoshka-common = { path = "../common" }
+tradoshka-risk = { path = "../risk" }
+tradoshka-data = { path = "../data" }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.36"
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

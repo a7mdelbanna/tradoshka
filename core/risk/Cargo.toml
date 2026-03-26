@@ -1,0 +1,11 @@
+[package]
+name = "tradoshka-risk"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tradoshka-common = { path = "../common" }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.36"
+chrono = { workspace = true }
+tracing = { workspace = true }

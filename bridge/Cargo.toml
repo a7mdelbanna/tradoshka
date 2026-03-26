@@ -1,0 +1,16 @@
+[package]
+name = "tradoshka-bridge"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "tradoshka_bridge"
+crate-type = ["cdylib"]
+
+[dependencies]
+tradoshka-common = { path = "../core/common" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

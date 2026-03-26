@@ -1,0 +1,21 @@
+[package]
+name = "tradoshka-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tradoshka-common = { path = "../common" }
+tradoshka-engine = { path = "../engine" }
+tradoshka-risk = { path = "../risk" }
+tradoshka-data = { path = "../data" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rust_decimal_macros = "1.36"
+anyhow = { workspace = true }
+uuid = { workspace = true }
