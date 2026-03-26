@@ -206,26 +206,18 @@ pub async fn get_equity_curve(State(state): State<SharedState>) -> Json<Vec<serd
     let equity = state.wallet.equity().to_f64().unwrap_or(100.0);
     let now = chrono::Utc::now();
 
-    // If we have trades, build from trade history
+    // Build from trade history — need at least 2 distinct days for the chart
     let trades = state.trade_recorder.all_trades();
     if !trades.is_empty() {
-        // Start point
-        data.push(serde_json::json!({
-            "time": trades[0].timestamp.format("%Y-%m-%d").to_string(),
-            "value": 100.0,
-        }));
-        // Current point
-        data.push(serde_json::json!({
-            "time": now.format("%Y-%m-%d").to_string(),
-            "value": equity,
-        }));
-    } else {
-        // No trades — flat line at initial balance
-        data.push(serde_json::json!({
-            "time": now.format("%Y-%m-%d").to_string(),
-            "value": 100.0,
-        }));
+        let first_day = trades[0].timestamp.format("%Y-%m-%d").to_string();
+        let today = now.format("%Y-%m-%d").to_string();
+        data.push(serde_json::json!({ "time": first_day, "value": 100.0 }));
+        if today != first_day {
+            data.push(serde_json::json!({ "time": today, "value": equity }));
+        }
+        // If same day — only 1 point, chart will show "No data yet"
     }
+    // No trades → empty array → chart shows "No data yet"
 
     Json(data)
 }

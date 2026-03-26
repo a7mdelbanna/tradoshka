@@ -7,8 +7,11 @@ interface Props { data: { time: string; value: number }[]; }
 export function EquityCurve({ data }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
+  // Need at least 2 unique data points for the chart
+  const validData = data.length >= 2;
+
   useEffect(() => {
-    if (!ref.current || data.length === 0) return;
+    if (!ref.current || !validData) return;
     const chart = createChart(ref.current, {
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#64748b", fontSize: 11 },
       grid: { vertLines: { color: "rgba(30,41,59,0.5)" }, horzLines: { color: "rgba(30,41,59,0.5)" } },
@@ -39,7 +42,7 @@ export function EquityCurve({ data }: Props) {
     return () => { window.removeEventListener("resize", resize); chart.remove(); };
   }, [data]);
 
-  if (data.length === 0) {
+  if (!validData) {
     return (
       <div className="w-full">
         <div className="mb-4">
