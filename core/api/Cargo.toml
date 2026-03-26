@@ -13,6 +13,7 @@ tradoshka-engine = { path = "../engine" }
 tradoshka-risk = { path = "../risk" }
 tradoshka-data = { path = "../data" }
 tradoshka-polymarket = { path = "../../markets/polymarket" }
+tradoshka-crypto = { path = "../../markets/crypto" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
 serde = { workspace = true }

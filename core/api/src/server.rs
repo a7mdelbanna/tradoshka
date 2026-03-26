@@ -15,6 +15,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/orders", get(routes::get_orders))
         .route("/api/risk", get(routes::get_risk))
         .route("/api/markets/polymarket", get(routes::get_polymarket_status))
+        .route("/api/markets/crypto", get(routes::get_crypto_status))
         .route("/api/wallet", get(routes::get_wallet))
         .route("/api/trades/live", get(routes::get_trades))
         .route("/api/readiness", get(routes::get_readiness))

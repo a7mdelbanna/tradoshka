@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let mut s = state.write().await;
         s.polymarket = Some(tradoshka_polymarket::adapter::PolymarketAdapter::new_public());
+        s.crypto = Some(tradoshka_crypto::adapter::CryptoAdapter::new_public());
     }
 
     tracing::info!("Starting Tradoshka in DRY MODE with ${initial_balance} initial balance");

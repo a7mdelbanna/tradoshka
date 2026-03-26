@@ -153,6 +153,21 @@ pub async fn get_polymarket_status(
 }
 
 // ---------------------------------------------------------------------------
+// Crypto
+// ---------------------------------------------------------------------------
+
+pub async fn get_crypto_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let connected = state.crypto.is_some();
+    Json(serde_json::json!({
+        "market": "crypto",
+        "exchange": "binance",
+        "connected": connected,
+        "status": if connected { "available" } else { "not_configured" }
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 

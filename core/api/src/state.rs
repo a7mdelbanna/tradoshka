@@ -3,6 +3,7 @@ use tokio::sync::RwLock;
 use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig};
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
+use tradoshka_crypto::adapter::CryptoAdapter;
 use rust_decimal_macros::dec;
 
 pub type SharedState = Arc<RwLock<AppState>>;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub risk_manager: TradoshkaRiskManager,
     pub dry_engine: DryModeEngine,
     pub polymarket: Option<PolymarketAdapter>,
+    pub crypto: Option<CryptoAdapter>,
     pub wallet: SimulatedWallet,
     pub trade_recorder: TradeRecorder,
     pub readiness_scorer: ReadinessScorer,
@@ -31,6 +33,7 @@ impl AppState {
             }),
             dry_engine: DryModeEngine::new(dec!(5)),
             polymarket: None,
+            crypto: None,
             wallet: SimulatedWallet::new(initial_balance, dec!(5)),
             trade_recorder: TradeRecorder::new(),
             readiness_scorer: ReadinessScorer::default(),
@@ -41,6 +44,11 @@ impl AppState {
 
     pub fn with_polymarket(mut self) -> Self {
         self.polymarket = Some(PolymarketAdapter::new_public());
+        self
+    }
+
+    pub fn with_crypto(mut self) -> Self {
+        self.crypto = Some(CryptoAdapter::new_public());
         self
     }
 }
