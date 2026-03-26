@@ -61,6 +61,7 @@ export interface WalletResponse {
   drawdown_pct: string;
   total_fees: string;
   open_positions: number;
+  total_trades?: number;
   positions: WalletPositionInfo[];
 }
 

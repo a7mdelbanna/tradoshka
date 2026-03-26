@@ -47,6 +47,18 @@ export default function TradingPage() {
     refetchInterval: 5000,
   });
 
+  // Separate queries for tab badge counts
+  const { data: spotWallet } = useQuery({
+    queryKey: ["wallet-spot-count"],
+    queryFn: () => api.walletByMarket("spot"),
+    refetchInterval: 10000,
+  });
+  const { data: perpsWallet } = useQuery({
+    queryKey: ["wallet-perps-count"],
+    queryFn: () => api.walletByMarket("perps"),
+    refetchInterval: 10000,
+  });
+
   const handleScan = async () => { try { await api.triggerScan(); } catch {} };
   const handleCycle = async () => { try { await api.triggerCycle(); } catch {} };
 
@@ -60,23 +72,15 @@ export default function TradingPage() {
     ? marketTrades.trades
     : trades;
 
-  // Count trades by market for tab badges
+  // Count trades by market for tab badges — sourced from API, not WS trades
   const polymarketCount = trades.filter((t) => {
     const m = t.market?.toLowerCase();
     if (m) return m === "polymarket";
     return t.question?.includes("?");
   }).length;
-  const cryptoCount = trades.filter((t) => {
-    const m = t.market?.toLowerCase();
-    if (m) return m === "crypto" || m === "spot" || m === "perps";
-    return t.symbol?.endsWith("USDT");
-  }).length;
-  // Rough split: treat all crypto trades as spot for the badge unless tagged perps
-  const spotCount = trades.filter((t) => {
-    const m = t.market?.toLowerCase();
-    return m === "spot" || (m !== "perps" && t.symbol?.endsWith("USDT"));
-  }).length;
-  const perpsCount = trades.filter((t) => t.market?.toLowerCase() === "perps").length;
+  const spotCount = spotWallet?.total_trades ?? spotWallet?.open_positions ?? 0;
+  const perpsCount = perpsWallet?.total_trades ?? perpsWallet?.open_positions ?? 0;
+  const cryptoCount = spotCount + perpsCount;
 
   const marketLabel = selectedMarket === "crypto"
     ? cryptoSubTab === "perps" ? "Perps" : "Spot"

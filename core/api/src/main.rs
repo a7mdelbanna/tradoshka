@@ -160,6 +160,19 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
+                // Poll latest crypto prices to keep them fresh every cycle
+                {
+                    let mut s = state.write().await;
+                    s.crypto_data.poll_prices().await;
+                }
+
+                // Update spot wallet prices with fresh crypto prices
+                {
+                    let mut s = state.write().await;
+                    let prices = s.crypto_data.current_prices();
+                    s.crypto_wallet.update_prices(&prices);
+                }
+
                 // Perpetuals cycle — open positions on different timeframes.
                 // Phase 1 (read lock): snapshot asset data and filter candidates.
                 let perp_assets_to_open: Vec<TrackedCryptoAsset> = {
@@ -231,6 +244,20 @@ async fn run_trading_loop(state: SharedState) {
                             }
                         }
                     }
+                }
+                // Update perp wallet prices with fresh crypto prices
+                {
+                    let mut s = state.write().await;
+                    let prices = s.crypto_data.current_prices();
+                    s.perp_wallet.update_prices(&prices);
+                }
+
+                // Poll Polymarket prices and update polymarket wallet
+                {
+                    let mut s = state.write().await;
+                    s.market_data.poll_prices().await;
+                    let prices = s.market_data.current_prices();
+                    s.polymarket_wallet.update_prices(&prices);
                 }
             }
         }
