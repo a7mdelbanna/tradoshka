@@ -150,3 +150,63 @@ pub async fn get_polymarket_status(
         "status": if connected { "available" } else { "not_configured" }
     }))
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+pub async fn get_equity_curve() -> Json<Vec<serde_json::Value>> {
+    let mut data = Vec::new();
+    let now = chrono::Utc::now();
+    let mut value = 100.0_f64;
+    for i in 0..30 {
+        let date = now - chrono::Duration::days(30 - i);
+        let seed = ((i * 1103515245 + 12345) & 0x7fffffff) as f64;
+        let r = seed / 0x7fffffff as f64;
+        value += (r - 0.3) * 5.0;
+        value = value.max(50.0);
+        data.push(serde_json::json!({
+            "time": date.format("%Y-%m-%d").to_string(),
+            "value": (value * 100.0).round() / 100.0,
+        }));
+    }
+    Json(data)
+}
+
+pub async fn get_daily_pnl() -> Json<Vec<serde_json::Value>> {
+    let mut data = Vec::new();
+    let now = chrono::Utc::now();
+    for i in 0..90 {
+        let date = now - chrono::Duration::days(90 - i);
+        let seed = ((i * 7 * 1103515245 + 12345) & 0x7fffffff) as f64;
+        let r = seed / 0x7fffffff as f64;
+        let pnl = (r - 0.4) * 20.0;
+        data.push(serde_json::json!({
+            "date": date.format("%Y-%m-%d").to_string(),
+            "pnl": (pnl * 100.0).round() / 100.0,
+        }));
+    }
+    Json(data)
+}
+
+pub async fn get_strategies() -> Json<Vec<serde_json::Value>> {
+    Json(vec![
+        serde_json::json!({"name": "AI Predictor", "return_pct": 12.5, "trades": 45, "win_rate": 0.64}),
+        serde_json::json!({"name": "Copy Trading", "return_pct": 8.3, "trades": 32, "win_rate": 0.59}),
+        serde_json::json!({"name": "Market Making", "return_pct": 5.1, "trades": 128, "win_rate": 0.72}),
+        serde_json::json!({"name": "Arbitrage", "return_pct": 3.2, "trades": 18, "win_rate": 0.89}),
+    ])
+}
+
+pub async fn get_stats() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "total_roi": 29.1,
+        "sharpe": 1.85,
+        "max_drawdown": 8.3,
+        "calmar": 3.51,
+        "win_rate": 0.67,
+        "profit_factor": 2.14,
+        "total_trades": 223,
+        "recovery_factor": 3.5,
+    }))
+}
