@@ -5,6 +5,7 @@ use tower_http::trace::TraceLayer;
 use crate::routes;
 use crate::state::SharedState;
 use crate::ws::ws_handler;
+use crate::trading_ws;
 
 pub fn create_router(state: SharedState) -> Router {
     Router::new()
@@ -23,6 +24,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/strategies", get(routes::get_strategies))
         .route("/api/stats", get(routes::get_stats))
         .route("/ws", get(ws_handler))
+        .route("/ws/trading", get(trading_ws::trading_ws_handler))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
