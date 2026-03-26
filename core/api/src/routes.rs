@@ -288,6 +288,70 @@ pub async fn get_readiness(State(state): State<SharedState>) -> Json<serde_json:
 }
 
 // ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+
+pub async fn get_orchestrator_status(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    Json(serde_json::json!({
+        "cycle_count": state.orchestrator.cycle_count(),
+        "last_cycle_at": state.orchestrator.last_cycle_at().map(|t| t.to_rfc3339()),
+        "wallet_mode": format!("{:?}", state.wallet.mode()),
+        "tracked_markets": state.market_data.tracked_markets().len(),
+        "open_positions": state.wallet.open_position_count(),
+    }))
+}
+
+pub async fn trigger_cycle(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let mut state = state.write().await;
+    // Collect markets first to end the borrow of market_data before running the cycle
+    let markets: Vec<_> = state.market_data.tracked_markets().into_iter().cloned().collect();
+    // Split borrows manually using raw pointers to avoid multiple-mutable-borrow error
+    let orchestrator: *mut tradoshka_engine::Orchestrator = &mut state.orchestrator;
+    let wallet: *mut tradoshka_engine::SimulatedWallet = &mut state.wallet;
+    let recorder: *mut tradoshka_engine::TradeRecorder = &mut state.trade_recorder;
+    // SAFETY: orchestrator, wallet, and trade_recorder are disjoint fields of AppState.
+    let result = unsafe {
+        (*orchestrator).run_cycle(&markets, &mut *wallet, &mut *recorder)
+    };
+    let cycle_count = state.orchestrator.cycle_count();
+    Json(serde_json::json!({
+        "cycle": cycle_count,
+        "markets_evaluated": result.markets_evaluated,
+        "signals_generated": result.signals_generated,
+        "trades_executed": result.trades_executed,
+        "trades": result.trades.iter().map(|t| serde_json::json!({
+            "question": t.market_question,
+            "direction": t.direction,
+            "side": format!("{:?}", t.side),
+            "shares": t.shares.to_string(),
+            "price": t.price.to_string(),
+            "strategy": t.strategy_id,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+pub async fn trigger_scan(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let mut state = state.write().await;
+    let markets = state.market_data.scan_markets().await;
+    Json(serde_json::json!({
+        "scanned": markets.len(),
+        "markets": markets.iter().map(|m| serde_json::json!({
+            "question": m.question,
+            "yes_price": m.yes_price.to_string(),
+            "no_price": m.no_price.to_string(),
+            "volume_24h": m.volume_24h,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tracked Markets
 // ---------------------------------------------------------------------------
 

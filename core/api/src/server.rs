@@ -1,4 +1,4 @@
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -23,6 +23,9 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/pnl/daily", get(routes::get_daily_pnl))
         .route("/api/strategies", get(routes::get_strategies))
         .route("/api/stats", get(routes::get_stats))
+        .route("/api/orchestrator", get(routes::get_orchestrator_status))
+        .route("/api/orchestrator/cycle", post(routes::trigger_cycle))
+        .route("/api/orchestrator/scan", post(routes::trigger_scan))
         .route("/ws", get(ws_handler))
         .route("/ws/trading", get(trading_ws::trading_ws_handler))
         .layer(CorsLayer::permissive())
