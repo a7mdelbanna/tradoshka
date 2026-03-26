@@ -15,6 +15,13 @@ async fn run_trading_loop(state: SharedState) {
         tracing::info!("Initial market scan: {} markets found", markets.len());
     }
 
+    // Initial crypto scan
+    {
+        let mut s = state.write().await;
+        let assets = s.crypto_data.scan().await;
+        tracing::info!("Initial crypto scan: {} assets tracked", assets.len());
+    }
+
     let mut scan_ticker = interval(scan_interval);
     let mut cycle_ticker = interval(cycle_interval);
 
@@ -27,6 +34,9 @@ async fn run_trading_loop(state: SharedState) {
                 let mut s = state.write().await;
                 let markets = s.market_data.scan_markets().await;
                 tracing::info!("Market scan: {} markets tracked", markets.len());
+                // Also scan crypto
+                let assets = s.crypto_data.scan().await;
+                tracing::info!("Crypto scan: {} assets tracked", assets.len());
             }
             _ = cycle_ticker.tick() => {
                 let mut s = state.write().await;

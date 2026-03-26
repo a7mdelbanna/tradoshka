@@ -167,6 +167,35 @@ pub async fn get_crypto_status(State(state): State<SharedState>) -> Json<serde_j
     }))
 }
 
+pub async fn get_crypto_assets(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let assets = state.crypto_data.tracked_assets();
+    Json(serde_json::json!({
+        "count": assets.len(),
+        "assets": assets.iter().map(|a| serde_json::json!({
+            "symbol": a.symbol,
+            "price": a.price.to_string(),
+            "volume_24h": a.volume_24h,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+pub async fn trigger_crypto_scan(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let mut state = state.write().await;
+    let assets = state.crypto_data.scan().await;
+    Json(serde_json::json!({
+        "scanned": assets.len(),
+        "assets": assets.iter().map(|a| serde_json::json!({
+            "symbol": a.symbol,
+            "price": a.price.to_string(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
