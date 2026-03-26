@@ -6,6 +6,7 @@ pub mod wallet;
 pub mod readiness;
 pub mod market_data;
 pub mod orchestrator;
+pub mod crypto_data;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -15,3 +16,4 @@ pub use wallet::{SimulatedWallet, WalletPosition, WalletMode};
 pub use readiness::{ReadinessScorer, ReadinessReport, ReadinessCriterion};
 pub use market_data::{MarketDataService, MarketDataConfig, TrackedMarket};
 pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult, StrategySignal};
+pub use crypto_data::CryptoDataService;
