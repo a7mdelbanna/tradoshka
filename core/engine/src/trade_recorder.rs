@@ -37,6 +37,12 @@ pub struct TradeRecorder {
     first_trade_at: Option<DateTime<Utc>>,
 }
 
+impl Default for TradeRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TradeRecorder {
     pub fn new() -> Self {
         Self {

@@ -49,6 +49,12 @@ pub struct SimulatedWallet {
     realized_pnl: Decimal,
 }
 
+impl Default for SimulatedWallet {
+    fn default() -> Self {
+        Self::new(Decimal::ZERO, Decimal::new(5, 0))
+    }
+}
+
 impl SimulatedWallet {
     pub fn new(initial_balance: Decimal, slippage_bps: Decimal) -> Self {
         Self {
