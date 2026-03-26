@@ -161,6 +161,16 @@ mod tests {
             edge_vs_market: 0.05,
             pnl: Some(pnl),
             is_closed: true,
+            thesis_reasoning: String::new(),
+            stop_loss: Decimal::ZERO,
+            trailing_stop: Decimal::ZERO,
+            take_profit: Decimal::ZERO,
+            time_stop_hours: 0,
+            thesis_invalidation: String::new(),
+            risk_amount: Decimal::ZERO,
+            reward_risk_ratio: 0.0,
+            strategy_tier: "Unproven".into(),
+            close_reason: None,
         }
     }
 

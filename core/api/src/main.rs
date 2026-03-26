@@ -140,6 +140,16 @@ async fn run_trading_loop(state: SharedState) {
                                     edge_vs_market: 0.0,
                                     pnl: None,
                                     is_closed: false,
+                                    thesis_reasoning: String::new(),
+                                    stop_loss: rust_decimal::Decimal::ZERO,
+                                    trailing_stop: rust_decimal::Decimal::ZERO,
+                                    take_profit: rust_decimal::Decimal::ZERO,
+                                    time_stop_hours: 0,
+                                    thesis_invalidation: String::new(),
+                                    risk_amount: rust_decimal::Decimal::ZERO,
+                                    reward_risk_ratio: 0.0,
+                                    strategy_tier: "Unproven".into(),
+                                    close_reason: None,
                                 };
                                 (*crypto_recorder).record(trade.clone());
                                 (*agg_recorder).record(trade.clone());
@@ -237,6 +247,16 @@ async fn run_trading_loop(state: SharedState) {
                                         edge_vs_market: 0.0,
                                         pnl: None,
                                         is_closed: false,
+                                        thesis_reasoning: String::new(),
+                                        stop_loss: rust_decimal::Decimal::ZERO,
+                                        trailing_stop: rust_decimal::Decimal::ZERO,
+                                        take_profit: rust_decimal::Decimal::ZERO,
+                                        time_stop_hours: 0,
+                                        thesis_invalidation: String::new(),
+                                        risk_amount: rust_decimal::Decimal::ZERO,
+                                        reward_risk_ratio: 0.0,
+                                        strategy_tier: "Unproven".into(),
+                                        close_reason: None,
                                     });
                                     tracing::info!("PERP {:?} {} {} @ {} {}x [{}]",
                                         side, pos.size, asset.symbol, pos.entry_price, pos.leverage, tf);

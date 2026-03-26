@@ -20,6 +20,16 @@ pub struct TradeRecord {
     pub edge_vs_market: f64,
     pub pnl: Option<Decimal>,
     pub is_closed: bool,
+    pub thesis_reasoning: String,
+    pub stop_loss: Decimal,
+    pub trailing_stop: Decimal,
+    pub take_profit: Decimal,
+    pub time_stop_hours: u32,
+    pub thesis_invalidation: String,
+    pub risk_amount: Decimal,
+    pub reward_risk_ratio: f64,
+    pub strategy_tier: String,
+    pub close_reason: Option<String>,
 }
 
 pub struct TradeRecorder {
@@ -140,6 +150,16 @@ mod tests {
             edge_vs_market: 0.05,
             pnl,
             is_closed: closed,
+            thesis_reasoning: String::new(),
+            stop_loss: Decimal::ZERO,
+            trailing_stop: Decimal::ZERO,
+            take_profit: Decimal::ZERO,
+            time_stop_hours: 0,
+            thesis_invalidation: String::new(),
+            risk_amount: Decimal::ZERO,
+            reward_risk_ratio: 0.0,
+            strategy_tier: "Unproven".into(),
+            close_reason: None,
         }
     }
 
