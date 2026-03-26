@@ -351,6 +351,8 @@ async fn run_trading_loop(state: SharedState) {
                 }
 
                 // --- Strategy evolution trading: route Polymarket trades to PM-* wallets ---
+                // Direct trading approach: PM strategies use their own params to decide trades,
+                // bypassing the strict research engine thresholds that prevent any PM signals.
                 {
                     let poly_markets: Vec<_> = {
                         let s = state.read().await;
@@ -371,53 +373,102 @@ async fn run_trading_loop(state: SharedState) {
                                 _ => continue,
                             };
 
-                            // Derive strategy-specific config from params
-                            let name_hash = slot.name.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                            let conf_noise = ((name_hash % 20) as f64 - 10.0) / 100.0; // +-0.10
-                            let rr_noise = ((name_hash % 15) as f64 - 7.0) / 10.0;     // +-0.7
-                            let min_edge = slot.params.get("min_edge");
-                            let config = ResearchConfig {
-                                equity: slot.wallet.equity(),
-                                risk_pct: 1.0,
-                                min_confidence: (0.60 + conf_noise).clamp(0.45, 0.80),
-                                min_signals: if min_edge > 5.0 { 3 } else { 2 },
-                                min_rr_ratio: (2.0 + rr_noise).clamp(1.2, 3.5),
-                                strategy_tier: "Unproven".into(),
-                                time_stop_hours: 72,
-                            };
+                            // Strategy-specific edge threshold from params (stored as percentage 0-100)
+                            let min_edge = (slot.params.get("min_edge") / 100.0).max(0.005);
+                            let min_volume = slot.params.get("min_volume").max(500.0);
 
                             for market in &poly_markets {
-                                // Skip if already have a position on this market's yes token
-                                let key = format!("{}:{}", market.yes_token_id, slot_name);
-                                if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
+                                // Skip if already have a position on this market's yes or no token
+                                let yes_key = format!("{}:{}", market.yes_token_id, slot_name);
+                                let no_key = format!("{}:{}", market.no_token_id, slot_name);
+                                if slot.wallet.positions().keys().any(|k| k == &yes_key || k == &no_key) {
+                                    continue;
+                                }
 
-                                let thesis = match ResearchEngine::analyze_polymarket(
-                                    &market.question,
-                                    market.yes_price,
-                                    market.no_price,
-                                    market.volume_24h,
-                                    None,
-                                    &config,
-                                ) {
-                                    Ok(t) => t,
-                                    Err(_) => continue,
+                                if market.yes_price <= rust_decimal::Decimal::ZERO
+                                    || market.no_price <= rust_decimal::Decimal::ZERO
+                                {
+                                    continue;
+                                }
+
+                                // Detect mispricing: how far does yes+no deviate from $1.00?
+                                let total = market.yes_price + market.no_price;
+                                let deviation = (total - rust_decimal::Decimal::ONE)
+                                    .abs()
+                                    .to_f64()
+                                    .unwrap_or(0.0);
+
+                                // Strategy decides: trade if deviation exceeds its min_edge
+                                // OR if volume is strong enough to signal real interest
+                                let has_mispricing = deviation > min_edge;
+                                let has_volume = market.volume_24h > min_volume;
+                                if !has_mispricing && !has_volume { continue; }
+
+                                // Buy the cheaper side (better expected value)
+                                let (token_id, price, outcome) =
+                                    if market.yes_price <= market.no_price {
+                                        (&market.yes_token_id, market.yes_price, "Yes")
+                                    } else {
+                                        (&market.no_token_id, market.no_price, "No")
+                                    };
+
+                                if price <= rust_decimal::Decimal::ZERO { continue; }
+
+                                // Risk-based position sizing: risk 1% of equity, max 80% loss on PM
+                                let equity = slot.wallet.equity();
+                                let risk_amount = equity * dec!(0.01);
+                                let stop_distance = price * dec!(0.80);
+                                if stop_distance <= rust_decimal::Decimal::ZERO { continue; }
+                                let size = (risk_amount / stop_distance)
+                                    .round_dp(0)
+                                    .min(dec!(50))
+                                    .max(dec!(1));
+
+                                let hard_sl = price * dec!(0.20);
+                                let take_profit = (price + stop_distance * dec!(2)).min(dec!(0.99));
+                                let thesis = tradoshka_engine::TradeThesis {
+                                    reasoning: format!(
+                                        "PM strategy {}. Market: {}. Buy {} at {}. \
+                                         Deviation: {:.1}%. Volume: ${:.0}/24h",
+                                        slot_name,
+                                        market.question,
+                                        outcome,
+                                        price,
+                                        deviation * 100.0,
+                                        market.volume_24h,
+                                    ),
+                                    signals_used: vec!["market_analysis".into()],
+                                    signals_agreed: 1,
+                                    signals_total: 1,
+                                    confidence: 0.5,
+                                    entry_price: price,
+                                    entry_reason: format!("Buy {} at {}", outcome, price),
+                                    hard_stop_loss: hard_sl.max(dec!(0.01)),
+                                    trailing_stop: (price * dec!(0.70)).max(dec!(0.01)),
+                                    take_profit,
+                                    time_stop_hours: 72,
+                                    thesis_invalidation: "Market resolved or price drops 80%"
+                                        .into(),
+                                    risk_per_trade_pct: 1.0,
+                                    risk_amount,
+                                    reward_risk_ratio: 2.0,
+                                    position_size: size,
+                                    max_loss: risk_amount,
+                                    strategy_tier: "Unproven".into(),
                                 };
 
-                                let size = thesis.position_size;
-                                if size <= rust_decimal::Decimal::ZERO { continue; }
-
                                 if let Some((fill_price, fee, filled)) = slot.wallet.buy(
-                                    &market.yes_token_id,
+                                    token_id,
                                     &market.question,
-                                    "Yes",
-                                    market.yes_price,
+                                    outcome,
+                                    price,
                                     size,
                                     slot_name,
                                 ) {
                                     slot.recorder.record(make_trade_record(
-                                        &market.yes_token_id,
+                                        token_id,
                                         &market.question,
-                                        "Yes",
+                                        outcome,
                                         OrderSide::Buy,
                                         Market::Polymarket,
                                         filled,
@@ -427,10 +478,15 @@ async fn run_trading_loop(state: SharedState) {
                                         &thesis,
                                     ));
                                     tracing::info!(
-                                        "EVOLUTION {} PM BUY {} @ {} — R:R {:.1}x | {}",
-                                        slot_name, market.question.chars().take(40).collect::<String>(),
-                                        fill_price, thesis.reward_risk_ratio,
-                                        thesis.reasoning.chars().take(50).collect::<String>()
+                                        "EVOLUTION {} PM BUY {} shares of {} @ {} | \
+                                         dev={:.1}% vol=${:.0} | {}",
+                                        slot_name,
+                                        filled,
+                                        outcome,
+                                        fill_price,
+                                        deviation * 100.0,
+                                        market.volume_24h,
+                                        market.question.chars().take(50).collect::<String>(),
                                     );
                                 }
                             }
