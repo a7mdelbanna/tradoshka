@@ -1,10 +1,16 @@
 "use client";
 
+import { CryptoSubTabs } from "@/components/trading/CryptoSubTabs";
+
 interface MarketTabsProps {
   selected: string;
   onSelect: (market: string) => void;
   polymarketCount: number;
   cryptoCount: number;
+  cryptoSubTab?: "spot" | "perps";
+  onCryptoSubTabSelect?: (tab: "spot" | "perps") => void;
+  spotCount?: number;
+  perpsCount?: number;
 }
 
 const TAB_CONFIG: Record<string, { accent: string; glow: string; bg: string; border: string; badge: string }> = {
@@ -36,6 +42,10 @@ export function MarketTabs({
   onSelect,
   polymarketCount,
   cryptoCount,
+  cryptoSubTab = "spot",
+  onCryptoSubTabSelect,
+  spotCount = 0,
+  perpsCount = 0,
 }: MarketTabsProps) {
   const tabs = [
     { id: "all", label: "All Markets", count: polymarketCount + cryptoCount, icon: "\u25C9" },
@@ -44,7 +54,7 @@ export function MarketTabs({
   ];
 
   return (
-    <div className="flex items-center gap-2 mb-6">
+    <div className="flex items-center gap-2 mb-6 flex-wrap">
       {tabs.map((tab) => {
         const config = TAB_CONFIG[tab.id] || TAB_CONFIG.all;
         const isSelected = selected === tab.id;
@@ -86,6 +96,14 @@ export function MarketTabs({
           </button>
         );
       })}
+      {selected === "crypto" && onCryptoSubTabSelect && (
+        <CryptoSubTabs
+          selected={cryptoSubTab}
+          onSelect={onCryptoSubTabSelect}
+          spotCount={spotCount}
+          perpsCount={perpsCount}
+        />
+      )}
     </div>
   );
 }

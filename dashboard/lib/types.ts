@@ -129,3 +129,26 @@ export interface CryptoAsset {
   price: string;
   volume_24h: number;
 }
+
+export interface PerpPositionInfo {
+  symbol: string;
+  side: string;
+  size: string;
+  entry_price: string;
+  mark_price: string;
+  leverage: number;
+  margin: string;
+  unrealized_pnl: string;
+  roe_pct: string;
+  liquidation_price: string;
+  funding: string;
+  strategy: string;
+  timeframe: string;
+}
+
+export interface PerpWalletResponse extends WalletResponse {
+  used_margin?: string;
+  available_margin?: string;
+  default_leverage?: number;
+  total_funding?: string;
+}

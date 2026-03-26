@@ -21,24 +21,28 @@ const MARKET_LABELS: Record<string, string> = {
 
 export default function TradingPage() {
   const [selectedMarket, setSelectedMarket] = useState<string>("all");
+  const [cryptoSubTab, setCryptoSubTab] = useState<"spot" | "perps">("spot");
   const { wallet, wallets, trades, connected } = useTradingWs();
   const { data: equityData } = useQuery({ queryKey: ["equity-curve"], queryFn: api.equityCurve });
   const { data: pnlData } = useQuery({ queryKey: ["daily-pnl"], queryFn: api.dailyPnl });
   const { data: orchStatus } = useQuery({ queryKey: ["orchestrator"], queryFn: api.orchestratorStatus, refetchInterval: 5000 });
   const { data: cryptoData } = useQuery({ queryKey: ["crypto-assets"], queryFn: api.cryptoAssets, refetchInterval: 10000 });
 
+  // When crypto is selected, use the sub-tab to determine which endpoint to call
+  const effectiveMarket = selectedMarket === "crypto" ? cryptoSubTab : selectedMarket;
+
   // Fetch per-market wallet data when a specific market is selected
   const { data: marketWallet } = useQuery({
-    queryKey: ["wallet-market", selectedMarket],
-    queryFn: () => api.walletByMarket(selectedMarket),
+    queryKey: ["wallet-market", effectiveMarket],
+    queryFn: () => api.walletByMarket(effectiveMarket),
     enabled: selectedMarket !== "all",
     refetchInterval: 5000,
   });
 
   // Fetch per-market trades
   const { data: marketTrades } = useQuery({
-    queryKey: ["trades-market", selectedMarket],
-    queryFn: () => api.tradesByMarket(selectedMarket),
+    queryKey: ["trades-market", effectiveMarket],
+    queryFn: () => api.tradesByMarket(effectiveMarket),
     enabled: selectedMarket !== "all",
     refetchInterval: 5000,
   });
@@ -48,7 +52,7 @@ export default function TradingPage() {
 
   // Determine which wallet to show
   const activeWallet = selectedMarket !== "all"
-    ? marketWallet || wallets[selectedMarket] || null
+    ? marketWallet || wallets[effectiveMarket] || null
     : wallet;
 
   // Determine which trades to show
@@ -57,7 +61,6 @@ export default function TradingPage() {
     : trades;
 
   // Count trades by market for tab badges
-  const allTrades = [...trades, ...(marketTrades?.trades || [])];
   const polymarketCount = trades.filter((t) => {
     const m = t.market?.toLowerCase();
     if (m) return m === "polymarket";
@@ -65,11 +68,25 @@ export default function TradingPage() {
   }).length;
   const cryptoCount = trades.filter((t) => {
     const m = t.market?.toLowerCase();
-    if (m) return m === "crypto";
+    if (m) return m === "crypto" || m === "spot" || m === "perps";
     return t.symbol?.endsWith("USDT");
   }).length;
+  // Rough split: treat all crypto trades as spot for the badge unless tagged perps
+  const spotCount = trades.filter((t) => {
+    const m = t.market?.toLowerCase();
+    return m === "spot" || (m !== "perps" && t.symbol?.endsWith("USDT"));
+  }).length;
+  const perpsCount = trades.filter((t) => t.market?.toLowerCase() === "perps").length;
 
-  const marketLabel = MARKET_LABELS[selectedMarket] || undefined;
+  const marketLabel = selectedMarket === "crypto"
+    ? cryptoSubTab === "perps" ? "Perps" : "Spot"
+    : MARKET_LABELS[selectedMarket] || undefined;
+
+  // Determine market type for PortfolioPanel
+  const marketType: "polymarket" | "spot" | "perps" | undefined =
+    selectedMarket === "polymarket" ? "polymarket"
+    : selectedMarket === "crypto" ? (cryptoSubTab === "perps" ? "perps" : "spot")
+    : undefined;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -167,6 +184,10 @@ export default function TradingPage() {
           onSelect={setSelectedMarket}
           polymarketCount={polymarketCount}
           cryptoCount={cryptoCount}
+          cryptoSubTab={cryptoSubTab}
+          onCryptoSubTabSelect={setCryptoSubTab}
+          spotCount={spotCount}
+          perpsCount={perpsCount}
         />
 
         {/* Split Screen */}
@@ -178,7 +199,7 @@ export default function TradingPage() {
                 <span className="w-1 h-4 rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600" />
                 Portfolio
               </h2>
-              <PortfolioPanel wallet={activeWallet} marketLabel={marketLabel} />
+              <PortfolioPanel wallet={activeWallet} marketLabel={marketLabel} marketType={marketType} />
             </div>
 
             <div className="glass-panel rounded-2xl p-6">
