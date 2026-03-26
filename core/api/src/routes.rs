@@ -2,6 +2,7 @@ use axum::{extract::State, Json};
 use serde::Serialize;
 use crate::state::SharedState;
 use serde_json;
+use rust_decimal::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Health
@@ -208,5 +209,100 @@ pub async fn get_stats() -> Json<serde_json::Value> {
         "profit_factor": 2.14,
         "total_trades": 223,
         "recovery_factor": 3.5,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Wallet
+// ---------------------------------------------------------------------------
+
+pub async fn get_wallet(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let w = &state.wallet;
+    Json(serde_json::json!({
+        "mode": format!("{:?}", w.mode()),
+        "balance": w.balance().to_string(),
+        "equity": w.equity().to_string(),
+        "unrealized_pnl": w.unrealized_pnl().to_string(),
+        "realized_pnl": w.realized_pnl().to_string(),
+        "drawdown_pct": w.drawdown_pct().to_string(),
+        "total_fees": w.total_fees().to_string(),
+        "open_positions": w.open_position_count(),
+        "positions": w.positions().values().map(|p| serde_json::json!({
+            "token_id": p.token_id,
+            "question": p.market_question,
+            "outcome": p.outcome,
+            "side": format!("{:?}", p.side),
+            "shares": p.shares.to_string(),
+            "avg_price": p.avg_price.to_string(),
+            "current_price": p.current_price.to_string(),
+            "unrealized_pnl": p.unrealized_pnl.to_string(),
+            "strategy": p.strategy_id,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Trades
+// ---------------------------------------------------------------------------
+
+pub async fn get_trades(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let trades = state.trade_recorder.recent_trades(50);
+    Json(serde_json::json!({
+        "trades": trades.iter().map(|t| serde_json::json!({
+            "id": t.id,
+            "timestamp": t.timestamp.to_rfc3339(),
+            "symbol": t.symbol,
+            "question": t.market_question,
+            "direction": t.direction,
+            "side": format!("{:?}", t.side),
+            "shares": t.shares.to_string(),
+            "price": t.price.to_string(),
+            "fee": t.fee.to_string(),
+            "strategy": t.strategy_id,
+            "strength": t.signal_strength,
+            "edge": t.edge_vs_market,
+            "pnl": t.pnl.map(|p| p.to_string()),
+            "closed": t.is_closed,
+        })).collect::<Vec<_>>(),
+        "total": state.trade_recorder.total_trade_count(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Readiness
+// ---------------------------------------------------------------------------
+
+pub async fn get_readiness(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let dd = state.wallet.drawdown_pct().to_f64().unwrap_or(0.0);
+    // For now, use empty daily returns — will be calculated from trade recorder in Phase 2B
+    let report = state.readiness_scorer.evaluate(&state.trade_recorder, dd, &[]);
+    Json(serde_json::json!({
+        "criteria": report.criteria,
+        "passed": report.passed_count,
+        "total": report.total_count,
+        "is_ready": report.is_ready,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Tracked Markets
+// ---------------------------------------------------------------------------
+
+pub async fn get_tracked_markets(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let markets = state.market_data.tracked_markets();
+    Json(serde_json::json!({
+        "count": markets.len(),
+        "markets": markets.iter().map(|m| serde_json::json!({
+            "condition_id": m.condition_id,
+            "question": m.question,
+            "yes_price": m.yes_price.to_string(),
+            "no_price": m.no_price.to_string(),
+            "volume_24h": m.volume_24h,
+            "liquidity": m.liquidity,
+        })).collect::<Vec<_>>(),
     }))
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine};
+use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig};
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
 use rust_decimal_macros::dec;
@@ -13,6 +13,10 @@ pub struct AppState {
     pub risk_manager: TradoshkaRiskManager,
     pub dry_engine: DryModeEngine,
     pub polymarket: Option<PolymarketAdapter>,
+    pub wallet: SimulatedWallet,
+    pub trade_recorder: TradeRecorder,
+    pub readiness_scorer: ReadinessScorer,
+    pub market_data: MarketDataService,
 }
 
 impl AppState {
@@ -26,6 +30,10 @@ impl AppState {
             }),
             dry_engine: DryModeEngine::new(dec!(5)),
             polymarket: None,
+            wallet: SimulatedWallet::new(initial_balance, dec!(5)),
+            trade_recorder: TradeRecorder::new(),
+            readiness_scorer: ReadinessScorer::default(),
+            market_data: MarketDataService::new(MarketDataConfig::default()),
         }
     }
 
