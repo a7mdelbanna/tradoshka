@@ -19,7 +19,7 @@ pub use trade_recorder::{TradeRecorder, TradeRecord};
 pub use wallet::{SimulatedWallet, WalletPosition, WalletMode};
 pub use readiness::{ReadinessScorer, ReadinessReport, ReadinessCriterion};
 pub use market_data::{MarketDataService, MarketDataConfig, TrackedMarket};
-pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult, StrategySignal};
+pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult};
 pub use crypto_data::{CryptoDataService, TrackedCryptoAsset};
 pub use perp_wallet::{PerpWallet, PerpPosition};
 pub use trade_thesis::{TradeThesis, ThesisBuilder};

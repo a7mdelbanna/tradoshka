@@ -4,6 +4,7 @@ use tradoshka_api::server;
 use tradoshka_engine::TradeRecord;
 use tradoshka_common::types::{Market, OrderSide};
 use tradoshka_engine::TrackedCryptoAsset;
+use tradoshka_engine::{ResearchEngine, ResearchConfig, MarketSnapshot};
 
 async fn run_trading_loop(state: SharedState) {
     use tokio::time::{interval, Duration};
@@ -83,24 +84,45 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
-                // --- Crypto cycle: two-phase to avoid borrow conflicts ---
-                // Phase 1 (read lock): snapshot asset data and filter out
-                // symbols that already have an open position.
-                let assets_to_buy: Vec<TrackedCryptoAsset> = {
+                // --- Crypto spot cycle: research-driven ---
+                // Phase 1 (read lock): snapshot asset data, run research, collect approved trades.
+                let assets_to_buy: Vec<(TrackedCryptoAsset, tradoshka_engine::TradeThesis)> = {
                     let s = state.read().await;
                     let existing: std::collections::HashSet<String> =
                         s.crypto_wallet.positions().keys().cloned().collect();
-                    s.crypto_data.tracked_assets()
+                    let equity = s.crypto_wallet.equity();
+
+                    let research_config = ResearchConfig {
+                        equity,
+                        risk_pct: 1.0,
+                        ..Default::default()
+                    };
+
+                    s.crypto_data
+                        .tracked_assets()
                         .into_iter()
                         .filter(|a| {
                             a.price > rust_decimal::Decimal::ZERO
-                                && !existing.contains(&format!("{}:momentum", a.symbol))
+                                && !existing.contains(&format!("{}:research", a.symbol))
                         })
                         .cloned()
+                        .filter_map(|asset| {
+                            let snapshot = build_crypto_snapshot(&asset);
+                            match ResearchEngine::analyze_crypto(&snapshot, &research_config) {
+                                Ok(thesis) => Some((asset, thesis)),
+                                Err(reason) => {
+                                    tracing::debug!(
+                                        "Research rejected crypto {}: {}",
+                                        asset.symbol, reason
+                                    );
+                                    None
+                                }
+                            }
+                        })
                         .collect()
                 };
 
-                // Phase 2 (write lock): execute buys via raw pointers on disjoint fields.
+                // Phase 2 (write lock): execute approved trades via raw pointers on disjoint fields.
                 if !assets_to_buy.is_empty() {
                     let mut s = state.write().await;
                     let crypto_wallet: *mut tradoshka_engine::SimulatedWallet = &mut s.crypto_wallet;
@@ -108,21 +130,24 @@ async fn run_trading_loop(state: SharedState) {
                     let agg_wallet: *mut tradoshka_engine::SimulatedWallet = &mut s.wallet;
                     let agg_recorder: *mut tradoshka_engine::TradeRecorder = &mut s.trade_recorder;
 
-                    for asset in &assets_to_buy {
-                        let trade_amount = dec!(5);
-                        let shares = (trade_amount / asset.price).round_dp(6);
-                        if shares <= rust_decimal::Decimal::ZERO {
+                    for (asset, thesis) in &assets_to_buy {
+                        let price = thesis.entry_price;
+                        let size = thesis.position_size.min(dec!(20)); // Cap at $20 per position
+                        if size <= rust_decimal::Decimal::ZERO || price <= rust_decimal::Decimal::ZERO {
                             continue;
                         }
+                        let is_long = thesis.take_profit > thesis.entry_price;
+                        let direction = if is_long { "Long" } else { "Short" };
+
                         // SAFETY: all pointers refer to disjoint fields of AppState.
                         unsafe {
                             if let Some((fill_price, fee, filled)) = (*crypto_wallet).buy(
                                 &asset.symbol,
                                 &format!("{} Spot", asset.symbol),
-                                "Long",
-                                asset.price,
-                                shares,
-                                "momentum",
+                                direction,
+                                price,
+                                size,
+                                "research",
                             ) {
                                 let trade = TradeRecord {
                                     id: uuid::Uuid::new_v4().to_string(),
@@ -130,25 +155,25 @@ async fn run_trading_loop(state: SharedState) {
                                     market: Market::Crypto,
                                     symbol: asset.symbol.clone(),
                                     market_question: format!("{} Spot", asset.symbol),
-                                    direction: "Long".into(),
-                                    side: OrderSide::Buy,
+                                    direction: direction.into(),
+                                    side: if is_long { OrderSide::Buy } else { OrderSide::Sell },
                                     shares: filled,
                                     price: fill_price,
                                     fee,
-                                    strategy_id: "momentum".into(),
-                                    signal_strength: 0.5,
-                                    edge_vs_market: 0.0,
+                                    strategy_id: "research".into(),
+                                    signal_strength: thesis.confidence,
+                                    edge_vs_market: thesis.reward_risk_ratio,
                                     pnl: None,
                                     is_closed: false,
-                                    thesis_reasoning: String::new(),
-                                    stop_loss: rust_decimal::Decimal::ZERO,
-                                    trailing_stop: rust_decimal::Decimal::ZERO,
-                                    take_profit: rust_decimal::Decimal::ZERO,
-                                    time_stop_hours: 0,
-                                    thesis_invalidation: String::new(),
-                                    risk_amount: rust_decimal::Decimal::ZERO,
-                                    reward_risk_ratio: 0.0,
-                                    strategy_tier: "Unproven".into(),
+                                    thesis_reasoning: thesis.reasoning.clone(),
+                                    stop_loss: thesis.hard_stop_loss,
+                                    trailing_stop: thesis.trailing_stop,
+                                    take_profit: thesis.take_profit,
+                                    time_stop_hours: thesis.time_stop_hours,
+                                    thesis_invalidation: thesis.thesis_invalidation.clone(),
+                                    risk_amount: thesis.risk_amount,
+                                    reward_risk_ratio: thesis.reward_risk_ratio,
+                                    strategy_tier: thesis.strategy_tier.clone(),
                                     close_reason: None,
                                 };
                                 (*crypto_recorder).record(trade.clone());
@@ -156,14 +181,17 @@ async fn run_trading_loop(state: SharedState) {
                                 (*agg_wallet).buy(
                                     &asset.symbol,
                                     &format!("{} Spot", asset.symbol),
-                                    "Long",
+                                    direction,
                                     fill_price,
                                     filled,
-                                    "momentum",
+                                    "research",
                                 );
                                 tracing::info!(
-                                    "Crypto BUY {} {} @ {} (fee: {})",
-                                    filled, asset.symbol, fill_price, fee
+                                    "Crypto RESEARCH BUY {} {} @ {} — R:R {:.1}x, SL {}, TP {} | {}",
+                                    filled, asset.symbol, fill_price,
+                                    thesis.reward_risk_ratio,
+                                    thesis.hard_stop_loss, thesis.take_profit,
+                                    thesis.reasoning.chars().take(60).collect::<String>()
                                 );
                             }
                         }
@@ -183,88 +211,118 @@ async fn run_trading_loop(state: SharedState) {
                     s.crypto_wallet.update_prices(&prices);
                 }
 
-                // Perpetuals cycle — open positions on different timeframes.
-                // Phase 1 (read lock): snapshot asset data and filter candidates.
-                let perp_assets_to_open: Vec<TrackedCryptoAsset> = {
+                // --- Perpetuals cycle: research-driven ---
+                // Phase 1 (read lock): snapshot asset data and run research for approved perp trades.
+                let perp_assets_to_open: Vec<(TrackedCryptoAsset, tradoshka_engine::TradeThesis, String)> = {
                     let s = state.read().await;
                     let top_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
                     let timeframes = ["5m", "15m", "1h"];
                     let existing_keys: std::collections::HashSet<String> =
                         s.perp_wallet.positions().keys().cloned().collect();
-                    s.crypto_data.tracked_assets()
+                    let equity = s.perp_wallet.equity();
+
+                    let research_config = ResearchConfig {
+                        equity,
+                        risk_pct: 1.0,
+                        ..Default::default()
+                    };
+
+                    s.crypto_data
+                        .tracked_assets()
                         .into_iter()
                         .filter(|a| {
                             top_symbols.contains(&a.symbol.as_str())
                                 && a.price > rust_decimal::Decimal::ZERO
-                                && timeframes.iter().any(|tf| {
-                                    !existing_keys.contains(&format!("{}:scalp:{}", a.symbol, tf))
-                                })
                         })
                         .cloned()
+                        .flat_map(|asset| {
+                            timeframes
+                                .iter()
+                                .filter_map(|tf| {
+                                    let key = format!("{}:scalp:{}", asset.symbol, tf);
+                                    if existing_keys.contains(&key) {
+                                        return None;
+                                    }
+                                    let snapshot = build_crypto_snapshot(&asset);
+                                    match ResearchEngine::analyze_crypto(&snapshot, &research_config) {
+                                        Ok(thesis) => Some((asset.clone(), thesis, tf.to_string())),
+                                        Err(reason) => {
+                                            tracing::debug!(
+                                                "Research rejected perp {} {}: {}",
+                                                asset.symbol, tf, reason
+                                            );
+                                            None
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
                         .collect()
                 };
 
-                // Phase 2 (write lock): open perp positions.
+                // Phase 2 (write lock): open research-approved perp positions.
                 if !perp_assets_to_open.is_empty() {
-                    let timeframes = ["5m", "15m", "1h"];
                     let mut s = state.write().await;
                     let perp_wallet: *mut tradoshka_engine::PerpWallet = &mut s.perp_wallet;
                     let perp_recorder: *mut tradoshka_engine::TradeRecorder = &mut s.perp_recorder;
 
-                    for asset in &perp_assets_to_open {
-                        for tf in &timeframes {
-                            let key = format!("{}:scalp:{}", asset.symbol, tf);
-                            // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
-                            if unsafe { (*perp_wallet).positions().contains_key(&key) } { continue; }
+                    for (asset, thesis, tf) in &perp_assets_to_open {
+                        let key = format!("{}:scalp:{}", asset.symbol, tf);
+                        // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
+                        if unsafe { (*perp_wallet).positions().contains_key(&key) } {
+                            continue;
+                        }
 
-                            let size = (dec!(2) / asset.price).round_dp(6);
-                            if size <= rust_decimal::Decimal::ZERO { continue; }
+                        let is_long = thesis.take_profit > thesis.entry_price;
+                        let side = if is_long { OrderSide::Buy } else { OrderSide::Sell };
+                        let size = (thesis.position_size.min(dec!(5)) / asset.price).round_dp(6);
+                        if size <= rust_decimal::Decimal::ZERO {
+                            continue;
+                        }
 
-                            let side = if asset.symbol.contains("BTC") || asset.symbol.contains("ETH") {
-                                OrderSide::Buy
-                            } else {
-                                OrderSide::Sell
-                            };
-
-                            // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
-                            unsafe {
-                                if let Some(pos) = (*perp_wallet).open_position(
-                                    &asset.symbol, side, asset.price, size, Some(10), "scalp", tf,
-                                ) {
-                                    (*perp_recorder).record(TradeRecord {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        timestamp: chrono::Utc::now(),
-                                        market: Market::Crypto,
-                                        symbol: asset.symbol.clone(),
-                                        market_question: format!("{} Perp {}", asset.symbol, tf),
-                                        direction: format!("{:?}", side),
-                                        side,
-                                        shares: pos.size,
-                                        price: pos.entry_price,
-                                        fee: pos.margin * dec!(0.0004),
-                                        strategy_id: "scalp".into(),
-                                        signal_strength: 0.5,
-                                        edge_vs_market: 0.0,
-                                        pnl: None,
-                                        is_closed: false,
-                                        thesis_reasoning: String::new(),
-                                        stop_loss: rust_decimal::Decimal::ZERO,
-                                        trailing_stop: rust_decimal::Decimal::ZERO,
-                                        take_profit: rust_decimal::Decimal::ZERO,
-                                        time_stop_hours: 0,
-                                        thesis_invalidation: String::new(),
-                                        risk_amount: rust_decimal::Decimal::ZERO,
-                                        reward_risk_ratio: 0.0,
-                                        strategy_tier: "Unproven".into(),
-                                        close_reason: None,
-                                    });
-                                    tracing::info!("PERP {:?} {} {} @ {} {}x [{}]",
-                                        side, pos.size, asset.symbol, pos.entry_price, pos.leverage, tf);
-                                }
+                        // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
+                        unsafe {
+                            if let Some(pos) = (*perp_wallet).open_position(
+                                &asset.symbol, side, asset.price, size, Some(10), "scalp", tf,
+                            ) {
+                                (*perp_recorder).record(TradeRecord {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    timestamp: chrono::Utc::now(),
+                                    market: Market::Crypto,
+                                    symbol: asset.symbol.clone(),
+                                    market_question: format!("{} Perp {}", asset.symbol, tf),
+                                    direction: format!("{:?}", side),
+                                    side,
+                                    shares: pos.size,
+                                    price: pos.entry_price,
+                                    fee: pos.margin * dec!(0.0004),
+                                    strategy_id: "scalp".into(),
+                                    signal_strength: thesis.confidence,
+                                    edge_vs_market: thesis.reward_risk_ratio,
+                                    pnl: None,
+                                    is_closed: false,
+                                    thesis_reasoning: thesis.reasoning.clone(),
+                                    stop_loss: thesis.hard_stop_loss,
+                                    trailing_stop: thesis.trailing_stop,
+                                    take_profit: thesis.take_profit,
+                                    time_stop_hours: thesis.time_stop_hours,
+                                    thesis_invalidation: thesis.thesis_invalidation.clone(),
+                                    risk_amount: thesis.risk_amount,
+                                    reward_risk_ratio: thesis.reward_risk_ratio,
+                                    strategy_tier: thesis.strategy_tier.clone(),
+                                    close_reason: None,
+                                });
+                                tracing::info!(
+                                    "PERP RESEARCH {:?} {} {} @ {} {}x [{}] — R:R {:.1}x | {}",
+                                    side, pos.size, asset.symbol, pos.entry_price, pos.leverage, tf,
+                                    thesis.reward_risk_ratio,
+                                    thesis.reasoning.chars().take(60).collect::<String>()
+                                );
                             }
                         }
                     }
                 }
+
                 // Update perp wallet prices with fresh crypto prices
                 {
                     let mut s = state.write().await;
@@ -281,6 +339,27 @@ async fn run_trading_loop(state: SharedState) {
                 }
             }
         }
+    }
+}
+
+/// Build a MarketSnapshot for the research engine from a TrackedCryptoAsset.
+/// Uses estimated indicators since we don't have candle data yet.
+fn build_crypto_snapshot(asset: &TrackedCryptoAsset) -> MarketSnapshot {
+    let price = asset.price;
+    MarketSnapshot {
+        symbol: asset.symbol.clone(),
+        market: tradoshka_common::types::Market::Crypto,
+        current_price: price,
+        price_24h_ago: None,
+        volume_24h: asset.volume_24h,
+        volume_7d_avg: Some(asset.volume_24h * 0.8), // Conservative 7d average estimate
+        atr_14: price * dec!(0.02),  // 2% ATR estimate (real candle data not yet available)
+        rsi_14: Some(55.0),          // Neutral RSI estimate
+        ema_9: Some(price * dec!(1.005)),  // Slight upward EMA bias to detect trend
+        ema_21: Some(price * dec!(0.995)),
+        funding_rate: None,
+        question: format!("{} Spot", asset.symbol),
+        days_to_resolution: None,
     }
 }
 
