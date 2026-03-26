@@ -7,6 +7,7 @@ edition.workspace = true
 tradoshka-common = { path = "../common" }
 tradoshka-risk = { path = "../risk" }
 tradoshka-data = { path = "../data" }
+tradoshka-polymarket = { path = "../../markets/polymarket" }
 rust_decimal = { workspace = true }
 rust_decimal_macros = "1.36"
 chrono = { workspace = true }
