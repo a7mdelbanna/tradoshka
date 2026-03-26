@@ -35,7 +35,7 @@ impl HalfKellySizer {
         }
 
         // Guard: invalid inputs
-        if avg_win_loss_ratio <= 0.0 || win_rate < 0.0 || win_rate > 1.0 {
+        if avg_win_loss_ratio <= 0.0 || !(0.0..=1.0).contains(&win_rate) {
             return Decimal::ZERO;
         }
 
