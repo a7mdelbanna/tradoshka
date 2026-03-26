@@ -1,0 +1,13 @@
+[project]
+name = "tradoshka-crypto"
+version = "0.1.0"
+description = "Tradoshka crypto trading strategies"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
