@@ -8,6 +8,9 @@ pub mod market_data;
 pub mod orchestrator;
 pub mod crypto_data;
 pub mod perp_wallet;
+pub mod trade_thesis;
+pub mod atr_stops;
+pub mod research;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -19,3 +22,6 @@ pub use market_data::{MarketDataService, MarketDataConfig, TrackedMarket};
 pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult, StrategySignal};
 pub use crypto_data::{CryptoDataService, TrackedCryptoAsset};
 pub use perp_wallet::{PerpWallet, PerpPosition};
+pub use trade_thesis::{TradeThesis, ThesisBuilder};
+pub use atr_stops::{StopCalculator, ExitLevels};
+pub use research::{ResearchEngine, ResearchConfig, MarketSnapshot};
