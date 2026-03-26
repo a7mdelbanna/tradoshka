@@ -224,6 +224,35 @@ async fn run_trading_loop(state: SharedState) {
                     s.crypto_wallet.update_prices(&prices);
                 }
 
+                // --- Position monitor: crypto spot --- check stops after prices update
+                {
+                    let mut s = state.write().await;
+                    let crypto_wallet: *mut tradoshka_engine::SimulatedWallet = &mut s.crypto_wallet;
+                    let crypto_recorder: *mut tradoshka_engine::TradeRecorder = &mut s.crypto_recorder;
+                    // SAFETY: crypto_wallet and crypto_recorder are disjoint fields of AppState.
+                    let checks = unsafe {
+                        tradoshka_engine::PositionMonitor::monitor_all(&*crypto_wallet, &*crypto_recorder)
+                    };
+                    for check in &checks {
+                        if check.action != tradoshka_engine::PositionAction::Hold {
+                            unsafe {
+                                if let Some((_, _, pnl)) = (*crypto_wallet).sell(
+                                    &check.symbol,
+                                    check.current_price,
+                                    rust_decimal::Decimal::MAX,
+                                    "research",
+                                ) {
+                                    (*crypto_recorder).close_trade(&check.symbol, "research", pnl);
+                                    tracing::info!(
+                                        "STOP TRIGGERED: {} — {:?} | PnL: {}",
+                                        check.symbol, check.action, pnl
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // --- Perpetuals cycle: research-driven ---
                 // Phase 1 (read lock): snapshot asset data and run research for approved perp trades.
                 let perp_assets_to_open: Vec<(TrackedCryptoAsset, tradoshka_engine::TradeThesis, String)> = {
@@ -349,6 +378,35 @@ async fn run_trading_loop(state: SharedState) {
                     s.market_data.poll_prices().await;
                     let prices = s.market_data.current_prices();
                     s.polymarket_wallet.update_prices(&prices);
+                }
+
+                // --- Position monitor: polymarket --- check stops after price update
+                {
+                    let mut s = state.write().await;
+                    let poly_wallet: *mut tradoshka_engine::SimulatedWallet = &mut s.polymarket_wallet;
+                    let poly_recorder: *mut tradoshka_engine::TradeRecorder = &mut s.polymarket_recorder;
+                    // SAFETY: polymarket_wallet and polymarket_recorder are disjoint fields of AppState.
+                    let poly_checks = unsafe {
+                        tradoshka_engine::PositionMonitor::monitor_all(&*poly_wallet, &*poly_recorder)
+                    };
+                    for check in &poly_checks {
+                        if check.action != tradoshka_engine::PositionAction::Hold {
+                            unsafe {
+                                if let Some((_, _, pnl)) = (*poly_wallet).sell(
+                                    &check.symbol,
+                                    check.current_price,
+                                    rust_decimal::Decimal::MAX,
+                                    "research",
+                                ) {
+                                    (*poly_recorder).close_trade(&check.symbol, "research", pnl);
+                                    tracing::info!(
+                                        "POLY STOP: {} — {:?} | PnL: {}",
+                                        check.symbol, check.action, pnl
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

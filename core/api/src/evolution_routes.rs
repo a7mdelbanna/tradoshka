@@ -6,14 +6,15 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
     let state = state.read().await;
     let mut strategies: Vec<serde_json::Value> = state.strategy_manager.alive_slots().iter()
         .map(|s| serde_json::json!({
+            "id": s.name,
             "name": s.name,
             "market": s.market,
             "strategy_type": s.params.strategy_type,
             "status": format!("{:?}", s.status),
+            // Numeric fields — page calls .toFixed() on these; win_rate is 0–1 fraction
             "sharpe": (s.sharpe_ratio() * 100.0).round() / 100.0,
-            "pnl": format!("{:.2}", s.pnl_pct()),
-            "pnl_pct": format!("{:.1}", s.pnl_pct()),
-            "win_rate": format!("{:.0}", s.win_rate() * 100.0),
+            "pnl": (s.pnl_pct() * 100.0).round() / 100.0,
+            "win_rate": s.win_rate(),
             "trades": s.trade_count(),
             "age_hours": s.age_hours(),
             "generation": s.generation,
@@ -39,13 +40,25 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
 pub async fn get_timeline(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let state = state.read().await;
     let events: Vec<serde_json::Value> = state.evolution_engine.recent_events(50).iter()
-        .map(|e| serde_json::json!({
-            "timestamp": e.timestamp.to_rfc3339(),
-            "hour": e.hour,
-            "action": format!("{:?}", e.action),
-            "strategy": e.strategy_name,
-            "details": e.details,
-        }))
+        .map(|e| {
+            // Map action to the string literals the dashboard expects
+            let event_type = match e.action {
+                tradoshka_engine::EvolutionAction::Killed => "KILLED",
+                tradoshka_engine::EvolutionAction::Spawned => "SPAWNED",
+                tradoshka_engine::EvolutionAction::Started => "SPAWNED",
+            };
+            serde_json::json!({
+                "timestamp": e.timestamp.to_rfc3339(),
+                "hour": e.hour,
+                // "type" is the field the dashboard TimelineEvent reads
+                "type": event_type,
+                "strategy_name": e.strategy_name,
+                "details": e.details,
+                // Legacy aliases
+                "action": format!("{:?}", e.action),
+                "strategy": e.strategy_name,
+            })
+        })
         .collect();
     Json(serde_json::json!({
         "events": events,
@@ -60,12 +73,13 @@ pub async fn get_graveyard(State(state): State<SharedState>) -> Json<serde_json:
             "name": s.name,
             "market": s.market,
             "strategy_type": s.params.strategy_type,
+            // Numeric fields — dashboard calls .toFixed() on these
             "lifetime_hours": s.age_hours(),
             "trades": s.trade_count(),
-            "pnl": format!("{:.2}", s.pnl_pct()),
-            "win_rate": format!("{:.0}", s.win_rate() * 100.0),
+            "final_pnl": (s.pnl_pct() * 100.0).round() / 100.0,
+            "win_rate": s.win_rate(),
             "sharpe": (s.sharpe_ratio() * 100.0).round() / 100.0,
-            "cause_of_death": s.cause_of_death,
+            "cause_of_death": s.cause_of_death.clone().unwrap_or_else(|| "Unknown".to_string()),
             "killed_at": s.killed_at.map(|t| t.to_rfc3339()),
             "generation": s.generation,
             "parent": s.parent,
@@ -89,13 +103,19 @@ pub async fn get_evolution_stats(State(state): State<SharedState>) -> Json<serde
     let total_capital: f64 = alive.iter().map(|s| s.wallet.equity().to_string().parse::<f64>().unwrap_or(100.0)).sum();
 
     Json(serde_json::json!({
+        // Canonical field names expected by the dashboard
+        "alive_count": state.strategy_manager.alive_count(),
+        "dead_count": state.strategy_manager.dead_count(),
+        "total_count": state.strategy_manager.total_count(),
+        "hours_running": state.evolution_engine.hour as f64,
+        "avg_sharpe": (avg_sharpe * 100.0).round() / 100.0,
+        "total_capital": total_capital,
+        "best_strategy": best.map(|s| s.name.clone()).unwrap_or_else(|| "—".to_string()),
+        // Legacy aliases kept for backwards-compat
         "alive": state.strategy_manager.alive_count(),
         "dead": state.strategy_manager.dead_count(),
-        "total": state.strategy_manager.total_count(),
         "current_hour": state.evolution_engine.hour,
-        "avg_sharpe": (avg_sharpe * 100.0).round() / 100.0,
         "total_capital_deployed": format!("{:.0}", total_capital),
-        "best_strategy": best.map(|s| s.name.clone()),
         "best_sharpe": best.map(|s| (s.sharpe_ratio() * 100.0).round() / 100.0).unwrap_or(0.0),
     }))
 }
