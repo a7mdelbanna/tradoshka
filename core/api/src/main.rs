@@ -13,6 +13,13 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_balance = dec!(100);
     let state = create_shared_state(initial_balance);
+
+    // Enable Polymarket in read-only mode
+    {
+        let mut s = state.write().await;
+        s.polymarket = Some(tradoshka_polymarket::adapter::PolymarketAdapter::new_public());
+    }
+
     tracing::info!("Starting Tradoshka in DRY MODE with ${initial_balance} initial balance");
     server::start(state, 3001).await
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine};
 use tradoshka_risk::TradoshkaRiskManager;
+use tradoshka_polymarket::adapter::PolymarketAdapter;
 use rust_decimal_macros::dec;
 
 pub type SharedState = Arc<RwLock<AppState>>;
@@ -11,6 +12,7 @@ pub struct AppState {
     pub portfolio: PortfolioTracker,
     pub risk_manager: TradoshkaRiskManager,
     pub dry_engine: DryModeEngine,
+    pub polymarket: Option<PolymarketAdapter>,
 }
 
 impl AppState {
@@ -23,7 +25,13 @@ impl AppState {
                 ..Default::default()
             }),
             dry_engine: DryModeEngine::new(dec!(5)),
+            polymarket: None,
         }
+    }
+
+    pub fn with_polymarket(mut self) -> Self {
+        self.polymarket = Some(PolymarketAdapter::new_public());
+        self
     }
 }
 

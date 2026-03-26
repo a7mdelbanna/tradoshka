@@ -1,6 +1,7 @@
 use axum::{extract::State, Json};
 use serde::Serialize;
 use crate::state::SharedState;
+use serde_json;
 
 // ---------------------------------------------------------------------------
 // Health
@@ -132,4 +133,20 @@ pub async fn get_risk(State(state): State<SharedState>) -> Json<RiskResponse> {
         breaker_state: format!("{:?}", breaker_state),
         allows_trading: breaker_state.allows_new_trades(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Polymarket
+// ---------------------------------------------------------------------------
+
+pub async fn get_polymarket_status(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let connected = state.polymarket.is_some();
+    Json(serde_json::json!({
+        "market": "polymarket",
+        "connected": connected,
+        "status": if connected { "available" } else { "not_configured" }
+    }))
 }
