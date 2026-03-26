@@ -11,6 +11,8 @@ pub mod perp_wallet;
 pub mod trade_thesis;
 pub mod atr_stops;
 pub mod research;
+pub mod position_monitor;
+pub mod strategy_tier;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -25,3 +27,5 @@ pub use perp_wallet::{PerpWallet, PerpPosition};
 pub use trade_thesis::{TradeThesis, ThesisBuilder};
 pub use atr_stops::{StopCalculator, ExitLevels};
 pub use research::{ResearchEngine, ResearchConfig, MarketSnapshot};
+pub use position_monitor::{PositionMonitor, PositionCheck, PositionAction};
+pub use strategy_tier::{StrategyTierTracker, Tier};
