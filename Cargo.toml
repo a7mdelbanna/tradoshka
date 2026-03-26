@@ -8,6 +8,7 @@ members = [
     "core/api",
     "bridge",
     "markets/polymarket",
+    "markets/crypto",
 ]
 
 [workspace.package]
