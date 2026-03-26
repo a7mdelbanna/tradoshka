@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     fn setup_manager() -> StrategyWalletManager {
-        let mut mgr = StrategyWalletManager::new(30, 5, dec!(100));
+        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
         mgr.initialize_defaults();
         mgr
     }
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(report.hour, 1);
         assert_eq!(report.killed.len(), 0);
         assert_eq!(report.spawned.len(), 0);
-        assert_eq!(report.alive_count, 20);
+        assert_eq!(report.alive_count, 60);
     }
 
     #[test]
@@ -212,9 +212,9 @@ mod tests {
         engine.min_trades_for_ranking = 0; // Rank even with 0 trades
         let mut mgr = setup_manager();
         let report = engine.evolve(&mut mgr);
-        // 20 strategies, bottom 10% = 2 killed, top 10% = 2 spawned
+        // 60 strategies, bottom 10% = 6 killed, top 10% = 6 spawned
         assert!(report.killed.len() >= 1);
-        assert!(report.alive_count < 22); // Some killed, some spawned
+        assert!(report.alive_count < 62); // Some killed, some spawned
     }
 
     #[test]
@@ -230,11 +230,11 @@ mod tests {
     fn test_evolve_respects_min_alive() {
         let mut engine = EvolutionEngine::new();
         engine.min_trades_for_ranking = 0;
-        let mut mgr = StrategyWalletManager::new(30, 18, dec!(100)); // min_alive = 18
-        mgr.initialize_defaults(); // 20 alive
-        // Can only kill 2 (20 - 18 = 2 buffer)
+        let mut mgr = StrategyWalletManager::new(80, 55, dec!(100)); // min_alive = 55
+        mgr.initialize_defaults(); // 60 alive
+        // Can only kill 5 (60 - 55 = 5 buffer)
         let report = engine.evolve(&mut mgr);
-        assert!(mgr.alive_count() >= 18);
+        assert!(mgr.alive_count() >= 55);
     }
 
     #[test]

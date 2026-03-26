@@ -222,39 +222,39 @@ mod tests {
 
     #[test]
     fn test_manager_initialize() {
-        let mut mgr = StrategyWalletManager::new(30, 10, dec!(100));
+        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
         mgr.initialize_defaults();
-        assert_eq!(mgr.alive_count(), 20);
+        assert_eq!(mgr.alive_count(), 60);
         assert_eq!(mgr.dead_count(), 0);
     }
 
     #[test]
     fn test_manager_rank() {
-        let mut mgr = StrategyWalletManager::new(30, 10, dec!(100));
+        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
         mgr.initialize_defaults();
         let ranked = mgr.rank_by_sharpe(0); // Include all (even 0 trades)
-        assert_eq!(ranked.len(), 20);
+        assert_eq!(ranked.len(), 60);
     }
 
     #[test]
     fn test_can_kill_respects_minimum() {
-        let mut mgr = StrategyWalletManager::new(30, 10, dec!(100));
+        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
         mgr.initialize_defaults();
-        assert!(mgr.can_kill()); // 20 > 10
+        assert!(mgr.can_kill()); // 60 > 15
 
-        // Kill down to 10
-        let names: Vec<String> = mgr.alive_slots().iter().take(10).map(|s| s.name.clone()).collect();
+        // Kill down to 15
+        let names: Vec<String> = mgr.alive_slots().iter().take(45).map(|s| s.name.clone()).collect();
         for name in names {
             mgr.get_mut(&name).unwrap().kill("test");
         }
-        assert!(!mgr.can_kill()); // 10 == 10, can't kill more
+        assert!(!mgr.can_kill()); // 15 == 15, can't kill more
     }
 
     #[test]
     fn test_can_spawn_respects_maximum() {
-        let mut mgr = StrategyWalletManager::new(20, 10, dec!(100));
+        let mut mgr = StrategyWalletManager::new(60, 15, dec!(100));
         mgr.initialize_defaults();
-        assert!(!mgr.can_spawn()); // 20 == 20, can't spawn more
+        assert!(!mgr.can_spawn()); // 60 == 60, can't spawn more
     }
 
     #[test]
