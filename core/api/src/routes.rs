@@ -540,7 +540,7 @@ pub async fn get_wallet_by_market(
 
     let (wallet, recorder) = match market.as_str() {
         "polymarket" => (&state.polymarket_wallet, &state.polymarket_recorder),
-        "crypto" => (&state.crypto_wallet, &state.crypto_recorder),
+        "crypto" | "spot" => (&state.crypto_wallet, &state.crypto_recorder),
         _ => (&state.wallet, &state.trade_recorder),
     };
     Json(serde_json::json!({
@@ -575,7 +575,7 @@ pub async fn get_trades_by_market(
     let state = state.read().await;
     let recorder = match market.as_str() {
         "polymarket" => &state.polymarket_recorder,
-        "crypto" => &state.crypto_recorder,
+        "crypto" | "spot" => &state.crypto_recorder,
         "perps" => &state.perp_recorder,
         _ => &state.trade_recorder,
     };
