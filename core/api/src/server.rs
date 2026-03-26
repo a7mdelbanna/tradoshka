@@ -23,6 +23,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/pnl/daily", get(routes::get_daily_pnl))
         .route("/api/strategies", get(routes::get_strategies))
         .route("/api/stats", get(routes::get_stats))
+        .route("/api/status", get(routes::get_system_status))
         .route("/api/orchestrator", get(routes::get_orchestrator_status))
         .route("/api/orchestrator/cycle", post(routes::trigger_cycle))
         .route("/api/orchestrator/scan", post(routes::trigger_scan))

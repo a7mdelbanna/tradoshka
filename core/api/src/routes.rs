@@ -352,6 +352,27 @@ pub async fn trigger_scan(
 }
 
 // ---------------------------------------------------------------------------
+// System Status
+// ---------------------------------------------------------------------------
+
+pub async fn get_system_status(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    Json(serde_json::json!({
+        "status": "running",
+        "mode": format!("{:?}", state.wallet.mode()),
+        "cycle_count": state.orchestrator.cycle_count(),
+        "last_cycle_at": state.orchestrator.last_cycle_at().map(|t| t.to_rfc3339()),
+        "tracked_markets": state.market_data.tracked_markets().len(),
+        "open_positions": state.wallet.open_position_count(),
+        "total_trades": state.trade_recorder.total_trade_count(),
+        "wallet_equity": state.wallet.equity().to_string(),
+        "wallet_balance": state.wallet.balance().to_string(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tracked Markets
 // ---------------------------------------------------------------------------
 
