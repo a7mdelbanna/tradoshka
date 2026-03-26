@@ -15,8 +15,18 @@ pub struct AppState {
     pub dry_engine: DryModeEngine,
     pub polymarket: Option<PolymarketAdapter>,
     pub crypto: Option<CryptoAdapter>,
+    /// Aggregate wallet (all markets combined -- kept for legacy /api/wallet endpoint)
     pub wallet: SimulatedWallet,
+    /// Aggregate trade recorder (all markets -- kept for legacy endpoints)
     pub trade_recorder: TradeRecorder,
+    /// Per-market wallet: Polymarket
+    pub polymarket_wallet: SimulatedWallet,
+    /// Per-market trade recorder: Polymarket
+    pub polymarket_recorder: TradeRecorder,
+    /// Per-market wallet: Crypto
+    pub crypto_wallet: SimulatedWallet,
+    /// Per-market trade recorder: Crypto
+    pub crypto_recorder: TradeRecorder,
     pub readiness_scorer: ReadinessScorer,
     pub market_data: MarketDataService,
     pub orchestrator: Orchestrator,
@@ -37,6 +47,10 @@ impl AppState {
             crypto: None,
             wallet: SimulatedWallet::new(initial_balance, dec!(5)),
             trade_recorder: TradeRecorder::new(),
+            polymarket_wallet: SimulatedWallet::new(dec!(100), dec!(5)),
+            polymarket_recorder: TradeRecorder::new(),
+            crypto_wallet: SimulatedWallet::new(dec!(100), dec!(5)),
+            crypto_recorder: TradeRecorder::new(),
             readiness_scorer: ReadinessScorer::default(),
             market_data: MarketDataService::new(MarketDataConfig::default()),
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),

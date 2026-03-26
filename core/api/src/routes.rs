@@ -491,3 +491,76 @@ pub async fn get_tracked_markets(State(state): State<SharedState>) -> Json<serde
         })).collect::<Vec<_>>(),
     }))
 }
+
+// ---------------------------------------------------------------------------
+// Per-Market Wallet & Trades
+// ---------------------------------------------------------------------------
+
+pub async fn get_wallet_by_market(
+    State(state): State<SharedState>,
+    axum::extract::Path(market): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let (wallet, recorder) = match market.as_str() {
+        "polymarket" => (&state.polymarket_wallet, &state.polymarket_recorder),
+        "crypto" => (&state.crypto_wallet, &state.crypto_recorder),
+        _ => (&state.wallet, &state.trade_recorder),
+    };
+    Json(serde_json::json!({
+        "market": market,
+        "mode": format!("{:?}", wallet.mode()),
+        "balance": wallet.balance().to_string(),
+        "equity": wallet.equity().to_string(),
+        "unrealized_pnl": wallet.unrealized_pnl().to_string(),
+        "realized_pnl": wallet.realized_pnl().to_string(),
+        "drawdown_pct": wallet.drawdown_pct().to_string(),
+        "total_fees": wallet.total_fees().to_string(),
+        "open_positions": wallet.open_position_count(),
+        "total_trades": recorder.total_trade_count(),
+        "positions": wallet.positions().values().map(|p| serde_json::json!({
+            "token_id": p.token_id,
+            "question": p.market_question,
+            "outcome": p.outcome,
+            "side": format!("{:?}", p.side),
+            "shares": p.shares.to_string(),
+            "avg_price": p.avg_price.to_string(),
+            "current_price": p.current_price.to_string(),
+            "unrealized_pnl": p.unrealized_pnl.to_string(),
+            "strategy": p.strategy_id,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+pub async fn get_trades_by_market(
+    State(state): State<SharedState>,
+    axum::extract::Path(market): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let recorder = match market.as_str() {
+        "polymarket" => &state.polymarket_recorder,
+        "crypto" => &state.crypto_recorder,
+        _ => &state.trade_recorder,
+    };
+    let trades = recorder.recent_trades(50);
+    Json(serde_json::json!({
+        "market": market,
+        "trades": trades.iter().map(|t| serde_json::json!({
+            "id": t.id,
+            "timestamp": t.timestamp.to_rfc3339(),
+            "symbol": t.symbol,
+            "question": t.market_question,
+            "direction": t.direction,
+            "side": format!("{:?}", t.side),
+            "shares": t.shares.to_string(),
+            "price": t.price.to_string(),
+            "fee": t.fee.to_string(),
+            "strategy": t.strategy_id,
+            "strength": t.signal_strength,
+            "edge": t.edge_vs_market,
+            "pnl": t.pnl.map(|p| p.to_string()),
+            "closed": t.is_closed,
+            "market": format!("{:?}", t.market),
+        })).collect::<Vec<_>>(),
+        "total": recorder.total_trade_count(),
+    }))
+}

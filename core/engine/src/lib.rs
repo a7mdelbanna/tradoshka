@@ -16,4 +16,4 @@ pub use wallet::{SimulatedWallet, WalletPosition, WalletMode};
 pub use readiness::{ReadinessScorer, ReadinessReport, ReadinessCriterion};
 pub use market_data::{MarketDataService, MarketDataConfig, TrackedMarket};
 pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult, StrategySignal};
-pub use crypto_data::CryptoDataService;
+pub use crypto_data::{CryptoDataService, TrackedCryptoAsset};
