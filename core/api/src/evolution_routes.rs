@@ -144,6 +144,35 @@ pub async fn get_strategy_wallet(
     let state = state.read().await;
     match state.strategy_manager.get(&name) {
         Some(slot) => {
+            let trades_list: Vec<serde_json::Value> = slot.recorder.recent_trades(20).iter().map(|t| serde_json::json!({
+                "id": t.id,
+                "timestamp": t.timestamp.to_rfc3339(),
+                "symbol": t.symbol,
+                "question": t.market_question,
+                "direction": t.direction,
+                "side": format!("{:?}", t.side),
+                "shares": t.shares.to_string(),
+                "price": t.price.to_string(),
+                "fee": t.fee.to_string(),
+                "pnl": t.pnl.map(|p| p.to_string()),
+                "closed": t.is_closed,
+                "thesis_reasoning": t.thesis_reasoning,
+                "stop_loss": t.stop_loss.to_string(),
+                "take_profit": t.take_profit.to_string(),
+                "strategy_tier": t.strategy_tier,
+            })).collect();
+
+            let positions_list: Vec<serde_json::Value> = slot.wallet.positions().values().map(|p| serde_json::json!({
+                "token_id": p.token_id,
+                "question": p.market_question,
+                "outcome": p.outcome,
+                "side": format!("{:?}", p.side),
+                "shares": p.shares.to_string(),
+                "avg_price": p.avg_price.to_string(),
+                "current_price": p.current_price.to_string(),
+                "unrealized_pnl": p.unrealized_pnl.to_string(),
+            })).collect();
+
             Json(serde_json::json!({
                 "name": slot.name,
                 "market": slot.market,
@@ -159,7 +188,11 @@ pub async fn get_strategy_wallet(
                 "generation": slot.generation,
                 "parent": slot.parent,
                 "age_hours": slot.age_hours(),
-                "positions": slot.wallet.open_position_count(),
+                "open_positions": slot.wallet.open_position_count(),
+                "trades_list": trades_list,
+                "positions": positions_list,
+                "closed_trades": slot.recorder.closed_trade_count(),
+                "winning_trades": slot.recorder.winning_trade_count(),
             }))
         }
         None => Json(serde_json::json!({"error": "Strategy not found"})),

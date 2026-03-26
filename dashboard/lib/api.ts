@@ -34,4 +34,5 @@ export const api = {
   evolutionTimeline: () => apiFetch<any>("/api/evolution/timeline"),
   evolutionGraveyard: () => apiFetch<any>("/api/evolution/graveyard"),
   evolutionTrigger: () => apiFetch<any>("/api/evolution/trigger", "POST"),
+  evolutionWallet: (name: string) => apiFetch<any>(`/api/evolution/wallet/${name}`),
 };

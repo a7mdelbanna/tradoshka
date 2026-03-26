@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import Link from "next/link";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -210,7 +211,12 @@ function LeaderboardTable({
                     #{row.rank}
                   </td>
                   <td className="py-2.5 pr-3 font-medium text-white whitespace-nowrap">
-                    <span className="mr-1.5">{row.name}</span>
+                    <Link
+                      href={`/evolution/${encodeURIComponent(row.name)}`}
+                      className="mr-1.5 text-emerald-400 hover:text-emerald-300 hover:underline transition-colors"
+                    >
+                      {row.name}
+                    </Link>
                     {row.generation > 1 && (
                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20">
                         v{row.generation}
