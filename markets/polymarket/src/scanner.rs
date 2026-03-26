@@ -52,14 +52,13 @@ impl MarketScanner {
         markets.iter().filter(|m| {
             if self.filter.exclude_closed && m.closed { return false; }
             if self.filter.require_order_book && m.enable_order_book != Some(true) { return false; }
-            if let Some(vol) = m.volume_24hr {
-                if vol < self.filter.min_volume_24h { return false; }
-            } else {
+            let vol = m.volume_24h_f64();
+            if vol == 0.0 && m.volume24hr.is_none() {
                 return false; // No volume data = skip
             }
-            if let Some(liq) = m.liquidity {
-                if liq < self.filter.min_liquidity { return false; }
-            }
+            if vol < self.filter.min_volume_24h { return false; }
+            let liq = m.liquidity_f64();
+            if liq > 0.0 && liq < self.filter.min_liquidity { return false; }
             true
         }).cloned().collect()
     }
@@ -68,6 +67,30 @@ impl MarketScanner {
     /// This indicates a potential arbitrage or mispricing opportunity
     pub fn find_mispriced(&self, markets: &[GammaMarket], min_deviation: f64) -> Vec<MispricedMarket> {
         markets.iter().filter_map(|m| {
+            let outcomes = m.parsed_outcomes();
+            let prices = m.parsed_prices();
+
+            // Try new API format first (clobTokenIds / outcomePrices)
+            if outcomes.len() == 2 && prices.len() == 2 {
+                let yes_idx = outcomes.iter().position(|o| o == "Yes")?;
+                let no_idx = outcomes.iter().position(|o| o == "No")?;
+                let yes_price = prices[yes_idx];
+                let no_price = prices[no_idx];
+                let total = yes_price + no_price;
+                let deviation = (total - 1.0).abs();
+                if deviation >= min_deviation {
+                    return Some(MispricedMarket {
+                        market: m.clone(),
+                        yes_price,
+                        no_price,
+                        total,
+                        deviation,
+                    });
+                }
+                return None;
+            }
+
+            // Fall back to legacy tokens array
             if m.tokens.len() != 2 { return None; }
             let yes_price = m.tokens.iter()
                 .find(|t| t.outcome == "Yes")
@@ -94,8 +117,8 @@ impl MarketScanner {
     /// Rank markets by trading opportunity (composite score from volume, liquidity)
     pub fn rank_by_opportunity(&self, markets: &[GammaMarket]) -> Vec<RankedMarket> {
         let mut ranked: Vec<RankedMarket> = markets.iter().filter_map(|m| {
-            let volume = m.volume_24hr?;
-            let liquidity = m.liquidity.unwrap_or(0.0);
+            let volume = m.volume24hr?;
+            let liquidity = m.liquidity_f64();
             // Score = normalized volume + normalized liquidity
             // Higher is better
             let score = volume.ln().max(0.0) + liquidity.ln().max(0.0);
@@ -126,16 +149,16 @@ mod tests {
             closed,
             enable_order_book: Some(order_book),
             neg_risk: None,
-            tokens: vec![
-                GammaToken { token_id: "yes1".into(), outcome: "Yes".into(), price: Some(yes_price), winner: None },
-                GammaToken { token_id: "no1".into(), outcome: "No".into(), price: Some(no_price), winner: None },
-            ],
-            volume: Some(volume * 10.0),
-            volume_24hr: Some(volume),
-            liquidity: Some(liquidity),
+            outcomes: Some(r#"["Yes","No"]"#.into()),
+            outcome_prices: Some(format!(r#"["{}", "{}"]"#, yes_price, no_price)),
+            clob_token_ids: Some(r#"["yes1","no1"]"#.into()),
+            volume_num: Some(volume * 10.0),
+            volume24hr: Some(volume),
+            liquidity_num: Some(liquidity),
             end_date_iso: None,
-            minimum_order_size: None,
-            minimum_tick_size: None,
+            tokens: vec![],
+            volume: None,
+            liquidity: None,
         }
     }
 

@@ -71,26 +71,49 @@ impl MarketDataService {
 
                 for rm in &top {
                     let market = &rm.market;
-                    if market.tokens.len() >= 2 {
-                        let yes_token = market.tokens.iter()
-                            .find(|t| t.outcome == "Yes")
-                            .map(|t| t.token_id.clone())
-                            .unwrap_or_default();
-                        let no_token = market.tokens.iter()
-                            .find(|t| t.outcome == "No")
-                            .map(|t| t.token_id.clone())
-                            .unwrap_or_default();
-                        let yes_price = market.tokens.iter()
-                            .find(|t| t.outcome == "Yes")
-                            .and_then(|t| t.price)
-                            .map(|p| Decimal::from_f64_retain(p).unwrap_or(Decimal::ZERO))
-                            .unwrap_or(Decimal::ZERO);
-                        let no_price = market.tokens.iter()
-                            .find(|t| t.outcome == "No")
-                            .and_then(|t| t.price)
-                            .map(|p| Decimal::from_f64_retain(p).unwrap_or(Decimal::ZERO))
-                            .unwrap_or(Decimal::ZERO);
+                    let token_ids = market.parsed_token_ids();
+                    let prices = market.parsed_prices();
+                    let outcomes = market.parsed_outcomes();
 
+                    // Determine yes/no token IDs and prices from new API format
+                    let (yes_token, no_token, yes_price, no_price) = if token_ids.len() >= 2 && outcomes.len() >= 2 {
+                        let yes_idx = outcomes.iter().position(|o| o == "Yes").unwrap_or(0);
+                        let no_idx = outcomes.iter().position(|o| o == "No").unwrap_or(1);
+                        let yes_tok = token_ids.get(yes_idx).cloned().unwrap_or_default();
+                        let no_tok = token_ids.get(no_idx).cloned().unwrap_or_default();
+                        let yes_p = prices.get(yes_idx).copied()
+                            .and_then(|p| Decimal::from_f64_retain(p))
+                            .unwrap_or(Decimal::ZERO);
+                        let no_p = prices.get(no_idx).copied()
+                            .and_then(|p| Decimal::from_f64_retain(p))
+                            .unwrap_or(Decimal::ZERO);
+                        (yes_tok, no_tok, yes_p, no_p)
+                    } else if market.tokens.len() >= 2 {
+                        // Fall back to legacy tokens array
+                        let yes_tok = market.tokens.iter()
+                            .find(|t| t.outcome == "Yes")
+                            .map(|t| t.token_id.clone())
+                            .unwrap_or_default();
+                        let no_tok = market.tokens.iter()
+                            .find(|t| t.outcome == "No")
+                            .map(|t| t.token_id.clone())
+                            .unwrap_or_default();
+                        let yes_p = market.tokens.iter()
+                            .find(|t| t.outcome == "Yes")
+                            .and_then(|t| t.price)
+                            .and_then(|p| Decimal::from_f64_retain(p))
+                            .unwrap_or(Decimal::ZERO);
+                        let no_p = market.tokens.iter()
+                            .find(|t| t.outcome == "No")
+                            .and_then(|t| t.price)
+                            .and_then(|p| Decimal::from_f64_retain(p))
+                            .unwrap_or(Decimal::ZERO);
+                        (yes_tok, no_tok, yes_p, no_p)
+                    } else {
+                        continue; // Not enough token data
+                    };
+
+                    if !yes_token.is_empty() {
                         let tracked = TrackedMarket {
                             condition_id: market.condition_id.clone(),
                             question: market.question.clone(),
@@ -98,8 +121,8 @@ impl MarketDataService {
                             no_token_id: no_token,
                             yes_price,
                             no_price,
-                            volume_24h: market.volume_24hr.unwrap_or(0.0),
-                            liquidity: market.liquidity.unwrap_or(0.0),
+                            volume_24h: market.volume_24h_f64(),
+                            liquidity: market.liquidity_f64(),
                             last_updated: Utc::now(),
                         };
                         self.tracked_markets.insert(market.condition_id.clone(), tracked);

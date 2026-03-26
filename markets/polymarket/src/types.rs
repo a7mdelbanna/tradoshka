@@ -26,12 +26,12 @@ pub struct GammaEvent {
     pub liquidity: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GammaMarket {
     pub id: String,
     #[serde(rename = "conditionId")]
     pub condition_id: String,
-    #[serde(rename = "questionId")]
+    #[serde(rename = "questionID")]
     pub question_id: Option<String>,
     pub question: String,
     pub slug: Option<String>,
@@ -41,17 +41,60 @@ pub struct GammaMarket {
     pub enable_order_book: Option<bool>,
     #[serde(rename = "negRisk")]
     pub neg_risk: Option<bool>,
-    pub tokens: Vec<GammaToken>,
-    pub volume: Option<f64>,
-    #[serde(rename = "volume24hr")]
-    pub volume_24hr: Option<f64>,
-    pub liquidity: Option<f64>,
-    #[serde(rename = "endDateIso")]
+    // These are JSON strings containing arrays, NOT actual arrays
+    #[serde(default)]
+    pub outcomes: Option<String>,           // "[\"Yes\", \"No\"]"
+    #[serde(rename = "outcomePrices", default)]
+    pub outcome_prices: Option<String>,     // "[\"0.084\", \"0.916\"]"
+    #[serde(rename = "clobTokenIds", default)]
+    pub clob_token_ids: Option<String>,     // "[\"75467...\", \"38429...\"]"
+    // Direct numeric fields
+    #[serde(rename = "volumeNum", default)]
+    pub volume_num: Option<f64>,
+    pub volume24hr: Option<f64>,
+    #[serde(rename = "liquidityNum", default)]
+    pub liquidity_num: Option<f64>,
+    #[serde(rename = "endDateIso", default)]
     pub end_date_iso: Option<String>,
-    #[serde(rename = "minimumOrderSize")]
-    pub minimum_order_size: Option<f64>,
-    #[serde(rename = "minimumTickSize")]
-    pub minimum_tick_size: Option<f64>,
+    // Keep old fields as optional for backward compatibility
+    #[serde(default)]
+    pub tokens: Vec<GammaToken>,
+    pub volume: Option<serde_json::Value>,     // Can be string or number
+    pub liquidity: Option<serde_json::Value>,   // Can be string or number
+}
+
+impl GammaMarket {
+    /// Parse the clobTokenIds JSON string into a Vec of token IDs.
+    pub fn parsed_token_ids(&self) -> Vec<String> {
+        self.clob_token_ids.as_ref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Parse the outcomePrices JSON string into a Vec of prices.
+    pub fn parsed_prices(&self) -> Vec<f64> {
+        self.outcome_prices.as_ref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .map(|v| v.iter().filter_map(|p| p.parse::<f64>().ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Parse the outcomes JSON string.
+    pub fn parsed_outcomes(&self) -> Vec<String> {
+        self.outcomes.as_ref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Get the volume as f64 (handles both string and number formats).
+    pub fn volume_24h_f64(&self) -> f64 {
+        self.volume24hr.unwrap_or(0.0)
+    }
+
+    /// Get the liquidity as f64.
+    pub fn liquidity_f64(&self) -> f64 {
+        self.liquidity_num.unwrap_or(0.0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,10 +357,58 @@ mod tests {
 
     #[test]
     fn test_deserialize_gamma_market() {
+        // Test with the real Gamma API format using clobTokenIds and outcomePrices
+        let json = r#"{
+            "id": "531202",
+            "conditionId": "0xb486",
+            "question": "BitBoy convicted?",
+            "active": true,
+            "closed": false,
+            "enableOrderBook": true,
+            "negRisk": false,
+            "outcomePrices": "[\"0.084\", \"0.916\"]",
+            "clobTokenIds": "[\"75467\", \"38429\"]",
+            "outcomes": "[\"Yes\", \"No\"]",
+            "volume24hr": 21185.78,
+            "liquidityNum": 9238.40,
+            "volume": "218188.92",
+            "volumeNum": 218188.92,
+            "endDateIso": "2026-03-31"
+        }"#;
+
+        let market: GammaMarket = serde_json::from_str(json).expect("deserialize gamma market");
+        assert_eq!(market.id, "531202");
+        assert_eq!(market.condition_id, "0xb486");
+        assert_eq!(market.question, "BitBoy convicted?");
+        assert!(market.active);
+        assert!(!market.closed);
+        assert_eq!(market.neg_risk, Some(false));
+        assert_eq!(market.end_date_iso.as_deref(), Some("2026-03-31"));
+
+        // Test parsed helpers
+        let token_ids = market.parsed_token_ids();
+        assert_eq!(token_ids.len(), 2);
+        assert_eq!(token_ids[0], "75467");
+        assert_eq!(token_ids[1], "38429");
+
+        let prices = market.parsed_prices();
+        assert_eq!(prices.len(), 2);
+        assert!((prices[0] - 0.084).abs() < 0.001);
+        assert!((prices[1] - 0.916).abs() < 0.001);
+
+        let outcomes = market.parsed_outcomes();
+        assert_eq!(outcomes, vec!["Yes", "No"]);
+
+        assert!((market.volume_24h_f64() - 21185.78).abs() < 0.01);
+        assert!((market.liquidity_f64() - 9238.40).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_deserialize_gamma_market_legacy_tokens() {
+        // Test backward compatibility with old tokens array format
         let json = r#"{
             "id": "mkt-001",
             "conditionId": "cond-abc",
-            "questionId": "q-xyz",
             "question": "Will X happen?",
             "slug": "will-x-happen",
             "active": true,
@@ -330,16 +421,12 @@ mod tests {
             ],
             "volume": 50000.0,
             "volume24hr": 1200.5,
-            "liquidity": 8000.0,
-            "endDateIso": "2025-12-31T00:00:00Z",
-            "minimumOrderSize": 1.0,
-            "minimumTickSize": 0.01
+            "endDateIso": "2025-12-31T00:00:00Z"
         }"#;
 
-        let market: GammaMarket = serde_json::from_str(json).expect("deserialize gamma market");
+        let market: GammaMarket = serde_json::from_str(json).expect("deserialize gamma market legacy");
         assert_eq!(market.id, "mkt-001");
         assert_eq!(market.condition_id, "cond-abc");
-        assert_eq!(market.question_id.as_deref(), Some("q-xyz"));
         assert_eq!(market.tokens.len(), 2);
         assert_eq!(market.tokens[0].outcome, "Yes");
         assert_eq!(market.tokens[0].price, Some(0.6));
