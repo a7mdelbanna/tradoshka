@@ -6,6 +6,48 @@ use tradoshka_common::types::{Market, OrderSide};
 use tradoshka_engine::TrackedCryptoAsset;
 use tradoshka_engine::{ResearchEngine, ResearchConfig, MarketSnapshot};
 
+/// Helper to construct a TradeRecord from thesis fields — avoids repetition across CS/PM/CP blocks.
+fn make_trade_record(
+    symbol: &str,
+    question: &str,
+    direction: &str,
+    side: OrderSide,
+    market: Market,
+    filled: rust_decimal::Decimal,
+    fill_price: rust_decimal::Decimal,
+    fee: rust_decimal::Decimal,
+    strategy_id: &str,
+    thesis: &tradoshka_engine::TradeThesis,
+) -> TradeRecord {
+    TradeRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        market,
+        symbol: symbol.into(),
+        market_question: question.into(),
+        direction: direction.into(),
+        side,
+        shares: filled,
+        price: fill_price,
+        fee,
+        strategy_id: strategy_id.into(),
+        signal_strength: thesis.confidence,
+        edge_vs_market: thesis.reward_risk_ratio,
+        pnl: None,
+        is_closed: false,
+        thesis_reasoning: thesis.reasoning.clone(),
+        stop_loss: thesis.hard_stop_loss,
+        trailing_stop: thesis.trailing_stop,
+        take_profit: thesis.take_profit,
+        time_stop_hours: thesis.time_stop_hours,
+        thesis_invalidation: thesis.thesis_invalidation.clone(),
+        risk_amount: thesis.risk_amount,
+        reward_risk_ratio: thesis.reward_risk_ratio,
+        strategy_tier: thesis.strategy_tier.clone(),
+        close_reason: None,
+    }
+}
+
 async fn run_trading_loop(state: SharedState) {
     use tokio::time::{interval, Duration};
 
@@ -162,33 +204,18 @@ async fn run_trading_loop(state: SharedState) {
                                 size,
                                 "research",
                             ) {
-                                let trade = TradeRecord {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    timestamp: chrono::Utc::now(),
-                                    market: Market::Crypto,
-                                    symbol: asset.symbol.clone(),
-                                    market_question: format!("{} Spot", asset.symbol),
-                                    direction: direction.into(),
-                                    side: if is_long { OrderSide::Buy } else { OrderSide::Sell },
-                                    shares: filled,
-                                    price: fill_price,
+                                let trade = make_trade_record(
+                                    &asset.symbol,
+                                    &format!("{} Spot", asset.symbol),
+                                    direction,
+                                    if is_long { OrderSide::Buy } else { OrderSide::Sell },
+                                    Market::Crypto,
+                                    filled,
+                                    fill_price,
                                     fee,
-                                    strategy_id: "research".into(),
-                                    signal_strength: thesis.confidence,
-                                    edge_vs_market: thesis.reward_risk_ratio,
-                                    pnl: None,
-                                    is_closed: false,
-                                    thesis_reasoning: thesis.reasoning.clone(),
-                                    stop_loss: thesis.hard_stop_loss,
-                                    trailing_stop: thesis.trailing_stop,
-                                    take_profit: thesis.take_profit,
-                                    time_stop_hours: thesis.time_stop_hours,
-                                    thesis_invalidation: thesis.thesis_invalidation.clone(),
-                                    risk_amount: thesis.risk_amount,
-                                    reward_risk_ratio: thesis.reward_risk_ratio,
-                                    strategy_tier: thesis.strategy_tier.clone(),
-                                    close_reason: None,
-                                };
+                                    "research",
+                                    thesis,
+                                );
                                 (*crypto_recorder).record(trade.clone());
                                 (*agg_recorder).record(trade.clone());
                                 (*agg_wallet).buy(
@@ -266,35 +293,181 @@ async fn run_trading_loop(state: SharedState) {
                                 size,
                                 slot_name,
                             ) {
-                                slot.recorder.record(TradeRecord {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    timestamp: chrono::Utc::now(),
-                                    market: Market::Crypto,
-                                    symbol: asset.symbol.clone(),
-                                    market_question: format!("{} Spot", asset.symbol),
-                                    direction: direction.into(),
-                                    side: if is_long { OrderSide::Buy } else { OrderSide::Sell },
-                                    shares: filled,
-                                    price: fill_price,
+                                slot.recorder.record(make_trade_record(
+                                    &asset.symbol,
+                                    &format!("{} Spot", asset.symbol),
+                                    direction,
+                                    if is_long { OrderSide::Buy } else { OrderSide::Sell },
+                                    Market::Crypto,
+                                    filled,
+                                    fill_price,
                                     fee,
-                                    strategy_id: slot_name.clone(),
-                                    signal_strength: thesis.confidence,
-                                    edge_vs_market: thesis.reward_risk_ratio,
-                                    pnl: None,
-                                    is_closed: false,
-                                    thesis_reasoning: thesis.reasoning.clone(),
-                                    stop_loss: thesis.hard_stop_loss,
-                                    trailing_stop: thesis.trailing_stop,
-                                    take_profit: thesis.take_profit,
-                                    time_stop_hours: thesis.time_stop_hours,
-                                    thesis_invalidation: thesis.thesis_invalidation.clone(),
-                                    risk_amount: thesis.risk_amount,
-                                    reward_risk_ratio: thesis.reward_risk_ratio,
-                                    strategy_tier: thesis.strategy_tier.clone(),
-                                    close_reason: None,
-                                });
+                                    slot_name,
+                                    &thesis,
+                                ));
                                 tracing::info!(
                                     "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x | {}",
+                                    slot_name, filled, asset.symbol, fill_price,
+                                    thesis.reward_risk_ratio,
+                                    thesis.reasoning.chars().take(50).collect::<String>()
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // --- Strategy evolution trading: route Polymarket trades to PM-* wallets ---
+                {
+                    let poly_markets: Vec<_> = {
+                        let s = state.read().await;
+                        s.market_data.tracked_markets().into_iter().cloned().collect()
+                    };
+
+                    if !poly_markets.is_empty() {
+                        let mut s = state.write().await;
+                        let pm_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                            .iter()
+                            .filter(|sl| sl.name.starts_with("PM-"))
+                            .map(|sl| sl.name.clone())
+                            .collect();
+
+                        for slot_name in &pm_slot_names {
+                            let slot = match s.strategy_manager.get_mut(slot_name) {
+                                Some(sl) if sl.is_alive() => sl,
+                                _ => continue,
+                            };
+
+                            let config = ResearchConfig {
+                                equity: slot.wallet.equity(),
+                                risk_pct: 1.0,
+                                min_confidence: 0.60,
+                                min_signals: 2,
+                                min_rr_ratio: 2.0,
+                                strategy_tier: "Unproven".into(),
+                                time_stop_hours: 72,
+                            };
+
+                            for market in &poly_markets {
+                                // Skip if already have a position on this market's yes token
+                                let key = format!("{}:{}", market.yes_token_id, slot_name);
+                                if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
+
+                                let thesis = match ResearchEngine::analyze_polymarket(
+                                    &market.question,
+                                    market.yes_price,
+                                    market.no_price,
+                                    market.volume_24h,
+                                    None,
+                                    &config,
+                                ) {
+                                    Ok(t) => t,
+                                    Err(_) => continue,
+                                };
+
+                                let size = thesis.position_size;
+                                if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                                if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                    &market.yes_token_id,
+                                    &market.question,
+                                    "Yes",
+                                    market.yes_price,
+                                    size,
+                                    slot_name,
+                                ) {
+                                    slot.recorder.record(make_trade_record(
+                                        &market.yes_token_id,
+                                        &market.question,
+                                        "Yes",
+                                        OrderSide::Buy,
+                                        Market::Polymarket,
+                                        filled,
+                                        fill_price,
+                                        fee,
+                                        slot_name,
+                                        &thesis,
+                                    ));
+                                    tracing::info!(
+                                        "EVOLUTION {} PM BUY {} @ {} — R:R {:.1}x | {}",
+                                        slot_name, market.question.chars().take(40).collect::<String>(),
+                                        fill_price, thesis.reward_risk_ratio,
+                                        thesis.reasoning.chars().take(50).collect::<String>()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Strategy evolution trading: route crypto perp trades to CP-* wallets ---
+                {
+                    let assets: Vec<TrackedCryptoAsset> = {
+                        let s = state.read().await;
+                        s.crypto_data.tracked_assets().into_iter().cloned().collect()
+                    };
+
+                    let mut s = state.write().await;
+                    let cp_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("CP-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &cp_slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) if sl.is_alive() => sl,
+                            _ => continue,
+                        };
+
+                        let config = ResearchConfig {
+                            equity: slot.wallet.equity(),
+                            risk_pct: 1.0,
+                            min_confidence: 0.60,
+                            min_signals: 2,
+                            min_rr_ratio: 2.0,
+                            strategy_tier: "Unproven".into(),
+                            time_stop_hours: 12, // Shorter hold for perps-style strategies
+                        };
+
+                        for asset in &assets {
+                            if asset.price <= rust_decimal::Decimal::ZERO { continue; }
+                            let key = format!("{}:{}", asset.symbol, slot_name);
+                            if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
+
+                            let snapshot = build_crypto_snapshot_for_perp(asset);
+                            let thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            };
+
+                            let size = thesis.position_size;
+                            if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                            let is_long = thesis.take_profit > thesis.entry_price;
+                            let direction = if is_long { "Long" } else { "Short" };
+
+                            if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                &asset.symbol,
+                                &format!("{} Perp", asset.symbol),
+                                direction,
+                                asset.price,
+                                size,
+                                slot_name,
+                            ) {
+                                slot.recorder.record(make_trade_record(
+                                    &asset.symbol,
+                                    &format!("{} Perp", asset.symbol),
+                                    direction,
+                                    if is_long { OrderSide::Buy } else { OrderSide::Sell },
+                                    Market::Crypto,
+                                    filled,
+                                    fill_price,
+                                    fee,
+                                    slot_name,
+                                    &thesis,
+                                ));
+                                tracing::info!(
+                                    "EVOLUTION {} CP BUY {} {} @ {} — R:R {:.1}x | {}",
                                     slot_name, filled, asset.symbol, fill_price,
                                     thesis.reward_risk_ratio,
                                     thesis.reasoning.chars().take(50).collect::<String>()
@@ -317,7 +490,7 @@ async fn run_trading_loop(state: SharedState) {
                     s.crypto_wallet.update_prices(&prices);
                 }
 
-                // Update strategy wallet prices with fresh crypto prices
+                // Update CS-* strategy wallet prices with fresh crypto prices
                 {
                     let mut s = state.write().await;
                     let prices = s.crypto_data.current_prices();
@@ -329,6 +502,22 @@ async fn run_trading_loop(state: SharedState) {
                     for name in &slot_names {
                         if let Some(slot) = s.strategy_manager.get_mut(name) {
                             slot.wallet.update_prices(&prices);
+                        }
+                    }
+                }
+
+                // Update CP-* strategy wallet prices with fresh crypto prices
+                {
+                    let mut s = state.write().await;
+                    let crypto_prices = s.crypto_data.current_prices();
+                    let cp_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("CP-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+                    for name in &cp_slot_names {
+                        if let Some(slot) = s.strategy_manager.get_mut(name) {
+                            slot.wallet.update_prices(&crypto_prices);
                         }
                     }
                 }
@@ -481,12 +670,24 @@ async fn run_trading_loop(state: SharedState) {
                     s.perp_wallet.update_prices(&prices);
                 }
 
-                // Poll Polymarket prices and update polymarket wallet
+                // Poll Polymarket prices and update polymarket wallet + PM-* strategy wallets
                 {
                     let mut s = state.write().await;
                     s.market_data.poll_prices().await;
-                    let prices = s.market_data.current_prices();
-                    s.polymarket_wallet.update_prices(&prices);
+                    let poly_prices = s.market_data.current_prices();
+                    s.polymarket_wallet.update_prices(&poly_prices);
+
+                    // Update PM-* strategy wallet prices
+                    let pm_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("PM-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+                    for name in &pm_slot_names {
+                        if let Some(slot) = s.strategy_manager.get_mut(name) {
+                            slot.wallet.update_prices(&poly_prices);
+                        }
+                    }
                 }
 
                 // --- Position monitor: polymarket --- check stops after price update
@@ -539,6 +740,27 @@ fn build_crypto_snapshot(asset: &TrackedCryptoAsset) -> MarketSnapshot {
         ema_21: Some(price * dec!(0.995)),
         funding_rate: None,
         question: format!("{} Spot", asset.symbol),
+        days_to_resolution: None,
+    }
+}
+
+/// Build a MarketSnapshot for CP-* perp strategies.
+/// Uses tighter ATR and adds a funding-rate signal to differentiate from spot.
+fn build_crypto_snapshot_for_perp(asset: &TrackedCryptoAsset) -> MarketSnapshot {
+    let price = asset.price;
+    MarketSnapshot {
+        symbol: asset.symbol.clone(),
+        market: tradoshka_common::types::Market::Crypto,
+        current_price: price,
+        price_24h_ago: None,
+        volume_24h: asset.volume_24h,
+        volume_7d_avg: Some(asset.volume_24h * 0.9), // Slightly higher vol assumption for perps
+        atr_14: price * dec!(0.015),  // Tighter 1.5% ATR for perp timeframes
+        rsi_14: Some(52.0),           // Slight bullish RSI bias for perps
+        ema_9: Some(price * dec!(1.003)),
+        ema_21: Some(price * dec!(0.997)),
+        funding_rate: Some(-0.0001),  // Mild negative funding — favours longs slightly
+        question: format!("{} Perp", asset.symbol),
         days_to_resolution: None,
     }
 }
