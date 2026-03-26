@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useTradingWs } from "@/hooks/useTradingWs";
@@ -7,18 +8,34 @@ import { PortfolioPanel } from "@/components/trading/PortfolioPanel";
 import { TradeFeed } from "@/components/trading/TradeFeed";
 import { ReadinessScore } from "@/components/trading/ReadinessScore";
 import { StrategyHealth } from "@/components/trading/StrategyHealth";
+import { CryptoPriceBar } from "@/components/trading/CryptoPriceBar";
+import { MarketTabs } from "@/components/trading/MarketTabs";
 import { EquityCurve } from "@/components/charts/EquityCurve";
 import { PLHeatmap } from "@/components/charts/PLHeatmap";
 import Link from "next/link";
 
 export default function TradingPage() {
+  const [selectedMarket, setSelectedMarket] = useState<string>("all");
   const { wallet, trades, connected } = useTradingWs();
   const { data: equityData } = useQuery({ queryKey: ["equity-curve"], queryFn: api.equityCurve });
   const { data: pnlData } = useQuery({ queryKey: ["daily-pnl"], queryFn: api.dailyPnl });
   const { data: orchStatus } = useQuery({ queryKey: ["orchestrator"], queryFn: api.orchestratorStatus, refetchInterval: 5000 });
+  const { data: cryptoData } = useQuery({ queryKey: ["crypto-assets"], queryFn: api.cryptoAssets, refetchInterval: 10000 });
 
   const handleScan = async () => { try { await api.triggerScan(); } catch {} };
   const handleCycle = async () => { try { await api.triggerCycle(); } catch {} };
+
+  // Count trades by market for tab badges
+  const polymarketCount = trades.filter((t) => {
+    const m = t.market?.toLowerCase();
+    if (m) return m === "polymarket";
+    return t.question?.includes("?");
+  }).length;
+  const cryptoCount = trades.filter((t) => {
+    const m = t.market?.toLowerCase();
+    if (m) return m === "crypto";
+    return t.symbol?.endsWith("USDT");
+  }).length;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -50,7 +67,7 @@ export default function TradingPage() {
 
       <div className="max-w-[1600px] mx-auto px-6 py-6">
         {/* Controls */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button onClick={handleScan}
             className="px-4 py-2 text-xs font-medium bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700/50 hover:border-slate-600/50 text-slate-300 rounded-lg transition-all">
             Scan Markets
@@ -67,6 +84,17 @@ export default function TradingPage() {
             </div>
           )}
         </div>
+
+        {/* Crypto Price Bar */}
+        <CryptoPriceBar />
+
+        {/* Market Tabs */}
+        <MarketTabs
+          selected={selectedMarket}
+          onSelect={setSelectedMarket}
+          polymarketCount={polymarketCount}
+          cryptoCount={cryptoCount}
+        />
 
         {/* Split Screen */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -93,7 +121,7 @@ export default function TradingPage() {
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Live Trade Feed</h2>
                 <span className="text-[10px] text-slate-600">{trades.length} trades</span>
               </div>
-              <TradeFeed trades={trades} />
+              <TradeFeed trades={trades} marketFilter={selectedMarket} />
             </div>
 
             {/* Charts */}

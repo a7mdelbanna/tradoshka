@@ -91,6 +91,7 @@ export interface TradeInfo {
   edge: number;
   pnl: string | null;
   closed: boolean;
+  market?: string;
 }
 
 export interface ReadinessResponse {
