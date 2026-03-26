@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService};
+use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService, PerpWallet};
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
 use tradoshka_crypto::adapter::CryptoAdapter;
@@ -27,6 +27,10 @@ pub struct AppState {
     pub crypto_wallet: SimulatedWallet,
     /// Per-market trade recorder: Crypto
     pub crypto_recorder: TradeRecorder,
+    /// Per-market wallet: Perpetuals
+    pub perp_wallet: PerpWallet,
+    /// Per-market trade recorder: Perpetuals
+    pub perp_recorder: TradeRecorder,
     pub readiness_scorer: ReadinessScorer,
     pub market_data: MarketDataService,
     pub orchestrator: Orchestrator,
@@ -51,6 +55,8 @@ impl AppState {
             polymarket_recorder: TradeRecorder::new(),
             crypto_wallet: SimulatedWallet::new(dec!(100), dec!(5)),
             crypto_recorder: TradeRecorder::new(),
+            perp_wallet: PerpWallet::new(dec!(100), 10), // $100, 10x default leverage
+            perp_recorder: TradeRecorder::new(),
             readiness_scorer: ReadinessScorer::default(),
             market_data: MarketDataService::new(MarketDataConfig::default()),
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),

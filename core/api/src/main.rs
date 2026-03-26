@@ -159,6 +159,79 @@ async fn run_trading_loop(state: SharedState) {
                         }
                     }
                 }
+
+                // Perpetuals cycle — open positions on different timeframes.
+                // Phase 1 (read lock): snapshot asset data and filter candidates.
+                let perp_assets_to_open: Vec<TrackedCryptoAsset> = {
+                    let s = state.read().await;
+                    let top_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+                    let timeframes = ["5m", "15m", "1h"];
+                    let existing_keys: std::collections::HashSet<String> =
+                        s.perp_wallet.positions().keys().cloned().collect();
+                    s.crypto_data.tracked_assets()
+                        .into_iter()
+                        .filter(|a| {
+                            top_symbols.contains(&a.symbol.as_str())
+                                && a.price > rust_decimal::Decimal::ZERO
+                                && timeframes.iter().any(|tf| {
+                                    !existing_keys.contains(&format!("{}:scalp:{}", a.symbol, tf))
+                                })
+                        })
+                        .cloned()
+                        .collect()
+                };
+
+                // Phase 2 (write lock): open perp positions.
+                if !perp_assets_to_open.is_empty() {
+                    let timeframes = ["5m", "15m", "1h"];
+                    let mut s = state.write().await;
+                    let perp_wallet: *mut tradoshka_engine::PerpWallet = &mut s.perp_wallet;
+                    let perp_recorder: *mut tradoshka_engine::TradeRecorder = &mut s.perp_recorder;
+
+                    for asset in &perp_assets_to_open {
+                        for tf in &timeframes {
+                            let key = format!("{}:scalp:{}", asset.symbol, tf);
+                            // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
+                            if unsafe { (*perp_wallet).positions().contains_key(&key) } { continue; }
+
+                            let size = (dec!(2) / asset.price).round_dp(6);
+                            if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                            let side = if asset.symbol.contains("BTC") || asset.symbol.contains("ETH") {
+                                OrderSide::Buy
+                            } else {
+                                OrderSide::Sell
+                            };
+
+                            // SAFETY: perp_wallet and perp_recorder are disjoint fields of AppState.
+                            unsafe {
+                                if let Some(pos) = (*perp_wallet).open_position(
+                                    &asset.symbol, side, asset.price, size, Some(10), "scalp", tf,
+                                ) {
+                                    (*perp_recorder).record(TradeRecord {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        timestamp: chrono::Utc::now(),
+                                        market: Market::Crypto,
+                                        symbol: asset.symbol.clone(),
+                                        market_question: format!("{} Perp {}", asset.symbol, tf),
+                                        direction: format!("{:?}", side),
+                                        side,
+                                        shares: pos.size,
+                                        price: pos.entry_price,
+                                        fee: pos.margin * dec!(0.0004),
+                                        strategy_id: "scalp".into(),
+                                        signal_strength: 0.5,
+                                        edge_vs_market: 0.0,
+                                        pnl: None,
+                                        is_closed: false,
+                                    });
+                                    tracing::info!("PERP {:?} {} {} @ {} {}x [{}]",
+                                        side, pos.size, asset.symbol, pos.entry_price, pos.leverage, tf);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

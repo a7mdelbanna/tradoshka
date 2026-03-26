@@ -501,6 +501,43 @@ pub async fn get_wallet_by_market(
     axum::extract::Path(market): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
     let state = state.read().await;
+
+    if market.as_str() == "perps" {
+        let w = &state.perp_wallet;
+        let r = &state.perp_recorder;
+        return Json(serde_json::json!({
+            "market": "perps",
+            "mode": format!("{:?}", state.wallet.mode()),
+            "balance": w.balance().to_string(),
+            "equity": w.equity().to_string(),
+            "unrealized_pnl": w.unrealized_pnl().to_string(),
+            "realized_pnl": w.realized_pnl().to_string(),
+            "drawdown_pct": w.drawdown_pct().to_string(),
+            "total_fees": w.total_fees().to_string(),
+            "total_funding": w.total_funding().to_string(),
+            "used_margin": w.used_margin().to_string(),
+            "available_margin": w.available_margin().to_string(),
+            "default_leverage": w.default_leverage(),
+            "open_positions": w.open_position_count(),
+            "total_trades": r.total_trade_count(),
+            "positions": w.positions().values().map(|p| serde_json::json!({
+                "symbol": p.symbol,
+                "side": format!("{:?}", p.side),
+                "size": p.size.to_string(),
+                "entry_price": p.entry_price.to_string(),
+                "mark_price": p.mark_price.to_string(),
+                "leverage": p.leverage,
+                "margin": p.margin.to_string(),
+                "unrealized_pnl": p.unrealized_pnl.to_string(),
+                "roe_pct": p.roe_pct().to_string(),
+                "liquidation_price": p.liquidation_price.to_string(),
+                "funding": p.funding_accumulated.to_string(),
+                "strategy": p.strategy_id,
+                "timeframe": p.timeframe,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
     let (wallet, recorder) = match market.as_str() {
         "polymarket" => (&state.polymarket_wallet, &state.polymarket_recorder),
         "crypto" => (&state.crypto_wallet, &state.crypto_recorder),
@@ -539,6 +576,7 @@ pub async fn get_trades_by_market(
     let recorder = match market.as_str() {
         "polymarket" => &state.polymarket_recorder,
         "crypto" => &state.crypto_recorder,
+        "perps" => &state.perp_recorder,
         _ => &state.trade_recorder,
     };
     let trades = recorder.recent_trades(50);
