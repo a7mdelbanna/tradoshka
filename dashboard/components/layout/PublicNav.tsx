@@ -19,6 +19,10 @@ export function PublicNav() {
             className="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800/50 rounded-lg transition-all duration-200">
             Trading
           </Link>
+          <Link href="/evolution"
+            className="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800/50 rounded-lg transition-all duration-200">
+            Evolution
+          </Link>
           <a href="https://github.com/a7mdelbanna/tradoshka" target="_blank" rel="noopener"
             className="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800/50 rounded-lg transition-all duration-200">
             GitHub

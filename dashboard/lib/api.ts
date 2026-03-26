@@ -29,4 +29,9 @@ export const api = {
   triggerCycle: () => apiFetch<CycleResult>("/api/orchestrator/cycle", "POST"),
   cryptoAssets: () => apiFetch<{ count: number; assets: CryptoAsset[] }>("/api/crypto/assets"),
   cryptoScan: () => apiFetch<{ scanned: number; assets: object[] }>("/api/crypto/scan", "POST"),
+  evolutionStats: () => apiFetch<any>("/api/evolution/stats"),
+  evolutionLeaderboard: () => apiFetch<any>("/api/evolution/leaderboard"),
+  evolutionTimeline: () => apiFetch<any>("/api/evolution/timeline"),
+  evolutionGraveyard: () => apiFetch<any>("/api/evolution/graveyard"),
+  evolutionTrigger: () => apiFetch<any>("/api/evolution/trigger", "POST"),
 };
