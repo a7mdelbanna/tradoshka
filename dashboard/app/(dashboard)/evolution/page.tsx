@@ -24,6 +24,13 @@ interface LeaderboardEntry {
   market: string;
   sharpe: number;
   pnl: number;
+  total_pnl: number;
+  unrealized_pnl: number;
+  realized_pnl: number;
+  equity: number;
+  balance: number;
+  open_positions: number;
+  fees: number;
   win_rate: number;
   trades: number;
   age_hours: number;
@@ -148,8 +155,11 @@ function LeaderboardTable({
 
   const arrow = (key: SortKey) => {
     if (sortKey !== key) return null;
-    return <span className="ml-0.5 opacity-60">{sortAsc ? "↑" : "↓"}</span>;
+    return <span className="ml-0.5 opacity-60">{sortAsc ? "\u2191" : "\u2193"}</span>;
   };
+
+  const pnlColor = (v: number) => v >= 0 ? "text-emerald-400" : "text-red-400";
+  const pnlFmt = (v: number) => `${v >= 0 ? "+" : ""}$${v.toFixed(2)}`;
 
   const thCls =
     "text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 pb-2 pr-3 cursor-pointer hover:text-slate-300 transition-colors whitespace-nowrap select-none";
@@ -158,7 +168,7 @@ function LeaderboardTable({
     <div className="overflow-x-auto premium-scrollbar">
       {rows.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-600">
-          <span className="text-4xl mb-3">🧬</span>
+          <span className="text-4xl mb-3">&#x1F9EC;</span>
           <p className="text-sm font-medium">No active strategies</p>
           <p className="text-xs mt-1">Run an evolution cycle to populate the leaderboard</p>
         </div>
@@ -175,17 +185,32 @@ function LeaderboardTable({
               <th className={thCls} onClick={() => toggleSort("market")}>
                 Market {arrow("market")}
               </th>
+              <th className={thCls} onClick={() => toggleSort("equity")}>
+                Equity {arrow("equity")}
+              </th>
+              <th className={thCls} onClick={() => toggleSort("unrealized_pnl")}>
+                Unreal {arrow("unrealized_pnl")}
+              </th>
+              <th className={thCls} onClick={() => toggleSort("realized_pnl")}>
+                Real {arrow("realized_pnl")}
+              </th>
+              <th className={thCls} onClick={() => toggleSort("total_pnl")}>
+                Total PnL {arrow("total_pnl")}
+              </th>
+              <th className={thCls} onClick={() => toggleSort("open_positions")}>
+                Pos {arrow("open_positions")}
+              </th>
               <th className={thCls} onClick={() => toggleSort("sharpe")}>
                 Sharpe {arrow("sharpe")}
-              </th>
-              <th className={thCls} onClick={() => toggleSort("pnl")}>
-                PnL {arrow("pnl")}
               </th>
               <th className={thCls} onClick={() => toggleSort("win_rate")}>
                 Win % {arrow("win_rate")}
               </th>
               <th className={thCls} onClick={() => toggleSort("trades")}>
                 Trades {arrow("trades")}
+              </th>
+              <th className={thCls} onClick={() => toggleSort("fees")}>
+                Fees {arrow("fees")}
               </th>
               <th className={thCls} onClick={() => toggleSort("age_hours")}>
                 Age {arrow("age_hours")}
@@ -201,6 +226,13 @@ function LeaderboardTable({
                 : isBottom
                 ? "shadow-[inset_0_0_20px_rgba(248,113,113,0.06)] border-l-2 border-l-red-500/40"
                 : "";
+
+              const equity = row.equity ?? 100;
+              const unrealPnl = row.unrealized_pnl ?? 0;
+              const realPnl = row.realized_pnl ?? 0;
+              const totalPnl = row.total_pnl ?? row.pnl ?? 0;
+              const openPos = row.open_positions ?? 0;
+              const fees = row.fees ?? 0;
 
               return (
                 <tr
@@ -228,17 +260,32 @@ function LeaderboardTable({
                       {marketLabel(row.market)}
                     </span>
                   </td>
+                  <td className="py-2.5 pr-3 font-mono font-semibold text-white">
+                    ${equity.toFixed(2)}
+                  </td>
+                  <td className={`py-2.5 pr-3 font-mono text-xs ${pnlColor(unrealPnl)}`}>
+                    {pnlFmt(unrealPnl)}
+                  </td>
+                  <td className={`py-2.5 pr-3 font-mono text-xs ${pnlColor(realPnl)}`}>
+                    {pnlFmt(realPnl)}
+                  </td>
+                  <td className={`py-2.5 pr-3 font-mono font-semibold ${pnlColor(totalPnl)}`}>
+                    {pnlFmt(totalPnl)}
+                  </td>
+                  <td className="py-2.5 pr-3 font-mono text-slate-300 text-center">
+                    {openPos}
+                  </td>
                   <td className={`py-2.5 pr-3 font-mono font-bold ${row.sharpe >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                     {row.sharpe.toFixed(2)}
-                  </td>
-                  <td className={`py-2.5 pr-3 font-mono font-semibold ${row.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                    {row.pnl >= 0 ? "+" : ""}${row.pnl.toFixed(2)}
                   </td>
                   <td className="py-2.5 pr-3 font-mono text-slate-300">
                     {(row.win_rate * 100).toFixed(1)}%
                   </td>
                   <td className="py-2.5 pr-3 font-mono text-slate-300">
                     {row.trades}
+                  </td>
+                  <td className="py-2.5 pr-3 font-mono text-slate-500 text-xs">
+                    ${fees.toFixed(2)}
                   </td>
                   <td className="py-2.5 pr-3 font-mono text-slate-500 text-xs">
                     {row.age_hours.toFixed(1)}h
@@ -379,6 +426,7 @@ function GraveyardTable({ rows }: { rows: GraveyardEntry[] }) {
 export default function EvolutionPage() {
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [marketFilter, setMarketFilter] = useState<string>("all");
 
   const { data: statsRaw } = useQuery({
     queryKey: ["evolution-stats"],
@@ -426,6 +474,11 @@ export default function EvolutionPage() {
       : Array.isArray(graveyardRaw?.strategies)
       ? graveyardRaw.strategies
       : PLACEHOLDER_GRAVEYARD;
+
+  // Apply market filter to leaderboard
+  const filteredLeaderboard = marketFilter === "all"
+    ? leaderboard
+    : leaderboard.filter((s) => s.market === marketFilter);
 
   const handleTrigger = async () => {
     setTriggerLoading(true);
@@ -529,10 +582,39 @@ export default function EvolutionPage() {
                 Leaderboard — Alive Strategies
               </h2>
               <span className="text-[10px] font-mono text-slate-600">
-                {leaderboard.length} strategies
+                {filteredLeaderboard.length} strategies
               </span>
             </div>
-            <LeaderboardTable rows={leaderboard} totalAlive={stats.alive_count || leaderboard.length} />
+
+            {/* Market filter bar */}
+            <div className="flex gap-2 mb-4">
+              {(["all", "polymarket", "crypto_spot", "crypto_perps"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMarketFilter(m)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                    marketFilter === m
+                      ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/30"
+                      : "text-slate-500 hover:text-slate-300 bg-slate-800/30"
+                  }`}
+                >
+                  {m === "all"
+                    ? "All Markets"
+                    : m === "polymarket"
+                    ? "Polymarket"
+                    : m === "crypto_spot"
+                    ? "Crypto Spot"
+                    : "Crypto Perps"}
+                  <span className="ml-1 opacity-60">
+                    {m === "all"
+                      ? leaderboard.length
+                      : leaderboard.filter((s) => s.market === m).length}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <LeaderboardTable rows={filteredLeaderboard} totalAlive={stats.alive_count || filteredLeaderboard.length} />
           </div>
 
           {/* Timeline */}

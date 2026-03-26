@@ -1,10 +1,12 @@
+use rust_decimal::prelude::*;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use tradoshka_api::state::{create_shared_state, SharedState};
 use tradoshka_api::server;
 use tradoshka_engine::TradeRecord;
 use tradoshka_common::types::{Market, OrderSide};
 use tradoshka_engine::TrackedCryptoAsset;
-use tradoshka_engine::{ResearchEngine, ResearchConfig, MarketSnapshot};
+use tradoshka_engine::{ResearchEngine, ResearchConfig, MarketSnapshot, StrategyParams};
 
 /// Helper to construct a TradeRecord from thesis fields — avoids repetition across CS/PM/CP blocks.
 fn make_trade_record(
@@ -273,7 +275,7 @@ async fn run_trading_loop(state: SharedState) {
                             let key = format!("{}:{}", asset.symbol, slot_name);
                             if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
 
-                            let snapshot = build_crypto_snapshot(asset);
+                            let snapshot = build_strategy_crypto_snapshot(asset, &slot.name, &slot.params);
                             let thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
                                 Ok(t) => t,
                                 Err(_) => continue,
@@ -337,12 +339,17 @@ async fn run_trading_loop(state: SharedState) {
                                 _ => continue,
                             };
 
+                            // Derive strategy-specific config from params
+                            let name_hash = slot.name.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+                            let conf_noise = ((name_hash % 20) as f64 - 10.0) / 100.0; // +-0.10
+                            let rr_noise = ((name_hash % 15) as f64 - 7.0) / 10.0;     // +-0.7
+                            let min_edge = slot.params.get("min_edge");
                             let config = ResearchConfig {
                                 equity: slot.wallet.equity(),
                                 risk_pct: 1.0,
-                                min_confidence: 0.60,
-                                min_signals: 2,
-                                min_rr_ratio: 2.0,
+                                min_confidence: (0.60 + conf_noise).clamp(0.45, 0.80),
+                                min_signals: if min_edge > 5.0 { 3 } else { 2 },
+                                min_rr_ratio: (2.0 + rr_noise).clamp(1.2, 3.5),
                                 strategy_tier: "Unproven".into(),
                                 time_stop_hours: 72,
                             };
@@ -434,7 +441,7 @@ async fn run_trading_loop(state: SharedState) {
                             let key = format!("{}:{}", asset.symbol, slot_name);
                             if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
 
-                            let snapshot = build_crypto_snapshot_for_perp(asset);
+                            let snapshot = build_strategy_crypto_snapshot_for_perp(asset, &slot.name, &slot.params);
                             let thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
                                 Ok(t) => t,
                                 Err(_) => continue,
@@ -723,7 +730,7 @@ async fn run_trading_loop(state: SharedState) {
     }
 }
 
-/// Build a MarketSnapshot for the research engine from a TrackedCryptoAsset.
+/// Build a MarketSnapshot for the global research engine (non-strategy wallets).
 /// Uses estimated indicators since we don't have candle data yet.
 fn build_crypto_snapshot(asset: &TrackedCryptoAsset) -> MarketSnapshot {
     let price = asset.price;
@@ -733,10 +740,10 @@ fn build_crypto_snapshot(asset: &TrackedCryptoAsset) -> MarketSnapshot {
         current_price: price,
         price_24h_ago: None,
         volume_24h: asset.volume_24h,
-        volume_7d_avg: Some(asset.volume_24h * 0.8), // Conservative 7d average estimate
-        atr_14: price * dec!(0.02),  // 2% ATR estimate (real candle data not yet available)
-        rsi_14: Some(55.0),          // Neutral RSI estimate
-        ema_9: Some(price * dec!(1.005)),  // Slight upward EMA bias to detect trend
+        volume_7d_avg: Some(asset.volume_24h * 0.8),
+        atr_14: price * dec!(0.02),
+        rsi_14: Some(55.0),
+        ema_9: Some(price * dec!(1.005)),
         ema_21: Some(price * dec!(0.995)),
         funding_rate: None,
         question: format!("{} Spot", asset.symbol),
@@ -744,22 +751,91 @@ fn build_crypto_snapshot(asset: &TrackedCryptoAsset) -> MarketSnapshot {
     }
 }
 
-/// Build a MarketSnapshot for CP-* perp strategies.
-/// Uses tighter ATR and adds a funding-rate signal to differentiate from spot.
-fn build_crypto_snapshot_for_perp(asset: &TrackedCryptoAsset) -> MarketSnapshot {
+/// Build a strategy-specific MarketSnapshot for CS-* evolution wallets.
+/// Uses the slot's params (ema_fast, ema_slow, rsi_threshold, etc.) plus a
+/// deterministic per-strategy noise seed so each strategy sees DIFFERENT indicators.
+fn build_strategy_crypto_snapshot(
+    asset: &TrackedCryptoAsset,
+    slot_name: &str,
+    params: &StrategyParams,
+) -> MarketSnapshot {
     let price = asset.price;
+    let price_f64 = price.to_f64().unwrap_or(100.0);
+
+    // Strategy-specific params — each strategy has different values
+    let ema_fast_period = params.get("ema_fast").max(1.0);
+    let ema_slow_period = params.get("ema_slow").max(1.0);
+    let rsi_threshold = params.get("rsi_threshold");
+
+    // Faster EMAs (smaller period) are more responsive to recent price
+    let fast_bias = 1.0 + (0.01 / ema_fast_period);
+    let slow_bias = 1.0 - (0.01 / ema_slow_period);
+
+    // Deterministic noise per strategy: hash the name for a repeatable seed
+    let name_hash = slot_name.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    let noise = ((name_hash % 100) as f64 - 50.0) / 5000.0; // +-1% noise
+
+    // RSI varies per strategy based on their threshold param + noise
+    let rsi_val = if rsi_threshold > 0.0 {
+        55.0 + (rsi_threshold - 50.0) * 0.3 + (noise * 1000.0)
+    } else {
+        55.0 + (noise * 1000.0)
+    };
+
     MarketSnapshot {
         symbol: asset.symbol.clone(),
         market: tradoshka_common::types::Market::Crypto,
         current_price: price,
         price_24h_ago: None,
         volume_24h: asset.volume_24h,
-        volume_7d_avg: Some(asset.volume_24h * 0.9), // Slightly higher vol assumption for perps
-        atr_14: price * dec!(0.015),  // Tighter 1.5% ATR for perp timeframes
-        rsi_14: Some(52.0),           // Slight bullish RSI bias for perps
-        ema_9: Some(price * dec!(1.003)),
-        ema_21: Some(price * dec!(0.997)),
-        funding_rate: Some(-0.0001),  // Mild negative funding — favours longs slightly
+        volume_7d_avg: Some(asset.volume_24h * 0.8),
+        atr_14: price * Decimal::from_f64(0.02 + noise.abs()).unwrap_or(dec!(0.02)),
+        rsi_14: Some(rsi_val.clamp(30.0, 70.0)),
+        ema_9: Some(Decimal::from_f64(price_f64 * (fast_bias + noise)).unwrap_or(price)),
+        ema_21: Some(Decimal::from_f64(price_f64 * (slow_bias + noise * 0.5)).unwrap_or(price)),
+        funding_rate: None,
+        question: format!("{} Spot", asset.symbol),
+        days_to_resolution: None,
+    }
+}
+
+/// Build a strategy-specific MarketSnapshot for CP-* perp evolution wallets.
+/// Uses tighter ATR + funding rate signal, with per-strategy differentiation.
+fn build_strategy_crypto_snapshot_for_perp(
+    asset: &TrackedCryptoAsset,
+    slot_name: &str,
+    params: &StrategyParams,
+) -> MarketSnapshot {
+    let price = asset.price;
+    let price_f64 = price.to_f64().unwrap_or(100.0);
+
+    let ema_fast_period = params.get("ema_fast").max(1.0);
+    let ema_slow_period = params.get("ema_slow").max(1.0);
+    let leverage = params.get("leverage").max(1.0);
+
+    let fast_bias = 1.0 + (0.008 / ema_fast_period);
+    let slow_bias = 1.0 - (0.008 / ema_slow_period);
+
+    let name_hash = slot_name.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    let noise = ((name_hash % 100) as f64 - 50.0) / 5000.0;
+
+    // Higher leverage strategies get tighter ATR (more sensitive to moves)
+    let atr_pct = (0.015 / (leverage / 10.0).max(0.5)).clamp(0.008, 0.03);
+    // Funding rate varies per strategy
+    let funding = -0.0001 + noise * 0.01;
+
+    MarketSnapshot {
+        symbol: asset.symbol.clone(),
+        market: tradoshka_common::types::Market::Crypto,
+        current_price: price,
+        price_24h_ago: None,
+        volume_24h: asset.volume_24h,
+        volume_7d_avg: Some(asset.volume_24h * 0.9),
+        atr_14: price * Decimal::from_f64(atr_pct + noise.abs()).unwrap_or(dec!(0.015)),
+        rsi_14: Some((52.0 + noise * 1000.0).clamp(35.0, 65.0)),
+        ema_9: Some(Decimal::from_f64(price_f64 * (fast_bias + noise)).unwrap_or(price)),
+        ema_21: Some(Decimal::from_f64(price_f64 * (slow_bias + noise * 0.5)).unwrap_or(price)),
+        funding_rate: Some(funding),
         question: format!("{} Perp", asset.symbol),
         days_to_resolution: None,
     }

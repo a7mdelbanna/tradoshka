@@ -1,4 +1,5 @@
 use axum::{extract::State, Json, extract::Path};
+use rust_decimal::prelude::*;
 use crate::state::SharedState;
 use tradoshka_engine;
 
@@ -14,6 +15,13 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
             // Numeric fields — page calls .toFixed() on these; win_rate is 0–1 fraction
             "sharpe": (s.sharpe_ratio() * 100.0).round() / 100.0,
             "pnl": (s.pnl_pct() * 100.0).round() / 100.0,
+            "total_pnl": (s.pnl_pct() * 100.0).round() / 100.0,
+            "unrealized_pnl": s.wallet.unrealized_pnl().to_f64().unwrap_or(0.0),
+            "realized_pnl": s.wallet.realized_pnl().to_f64().unwrap_or(0.0),
+            "equity": s.wallet.equity().to_f64().unwrap_or(100.0),
+            "balance": s.wallet.balance().to_f64().unwrap_or(100.0),
+            "open_positions": s.wallet.open_position_count(),
+            "fees": s.wallet.total_fees().to_f64().unwrap_or(0.0),
             "win_rate": s.win_rate(),
             "trades": s.trade_count(),
             "age_hours": s.age_hours(),
