@@ -211,6 +211,99 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
+                // --- Strategy evolution trading: route crypto spot trades to CS-* wallets ---
+                {
+                    let assets: Vec<TrackedCryptoAsset> = {
+                        let s = state.read().await;
+                        s.crypto_data.tracked_assets().into_iter().cloned().collect()
+                    };
+
+                    let mut s = state.write().await;
+                    let slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("CS-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) if sl.is_alive() => sl,
+                            _ => continue,
+                        };
+
+                        let config = ResearchConfig {
+                            equity: slot.wallet.equity(),
+                            risk_pct: 1.0,
+                            min_confidence: 0.60,
+                            min_signals: 2,
+                            min_rr_ratio: 2.0,
+                            strategy_tier: "Unproven".into(),
+                            time_stop_hours: 24,
+                        };
+
+                        for asset in &assets {
+                            if asset.price <= rust_decimal::Decimal::ZERO { continue; }
+                            let key = format!("{}:{}", asset.symbol, slot_name);
+                            if slot.wallet.positions().keys().any(|k| k == &key) { continue; }
+
+                            let snapshot = build_crypto_snapshot(asset);
+                            let thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            };
+
+                            let size = thesis.position_size;
+                            if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                            let is_long = thesis.take_profit > thesis.entry_price;
+                            let direction = if is_long { "Long" } else { "Short" };
+
+                            if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                &asset.symbol,
+                                &format!("{} Spot", asset.symbol),
+                                direction,
+                                asset.price,
+                                size,
+                                slot_name,
+                            ) {
+                                slot.recorder.record(TradeRecord {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    timestamp: chrono::Utc::now(),
+                                    market: Market::Crypto,
+                                    symbol: asset.symbol.clone(),
+                                    market_question: format!("{} Spot", asset.symbol),
+                                    direction: direction.into(),
+                                    side: if is_long { OrderSide::Buy } else { OrderSide::Sell },
+                                    shares: filled,
+                                    price: fill_price,
+                                    fee,
+                                    strategy_id: slot_name.clone(),
+                                    signal_strength: thesis.confidence,
+                                    edge_vs_market: thesis.reward_risk_ratio,
+                                    pnl: None,
+                                    is_closed: false,
+                                    thesis_reasoning: thesis.reasoning.clone(),
+                                    stop_loss: thesis.hard_stop_loss,
+                                    trailing_stop: thesis.trailing_stop,
+                                    take_profit: thesis.take_profit,
+                                    time_stop_hours: thesis.time_stop_hours,
+                                    thesis_invalidation: thesis.thesis_invalidation.clone(),
+                                    risk_amount: thesis.risk_amount,
+                                    reward_risk_ratio: thesis.reward_risk_ratio,
+                                    strategy_tier: thesis.strategy_tier.clone(),
+                                    close_reason: None,
+                                });
+                                tracing::info!(
+                                    "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x | {}",
+                                    slot_name, filled, asset.symbol, fill_price,
+                                    thesis.reward_risk_ratio,
+                                    thesis.reasoning.chars().take(50).collect::<String>()
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Poll latest crypto prices to keep them fresh every cycle
                 {
                     let mut s = state.write().await;
@@ -222,6 +315,22 @@ async fn run_trading_loop(state: SharedState) {
                     let mut s = state.write().await;
                     let prices = s.crypto_data.current_prices();
                     s.crypto_wallet.update_prices(&prices);
+                }
+
+                // Update strategy wallet prices with fresh crypto prices
+                {
+                    let mut s = state.write().await;
+                    let prices = s.crypto_data.current_prices();
+                    let slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("CS-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+                    for name in &slot_names {
+                        if let Some(slot) = s.strategy_manager.get_mut(name) {
+                            slot.wallet.update_prices(&prices);
+                        }
+                    }
                 }
 
                 // --- Position monitor: crypto spot --- check stops after prices update

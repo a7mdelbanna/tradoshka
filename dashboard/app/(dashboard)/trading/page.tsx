@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useTradingWs } from "@/hooks/useTradingWs";
 import { ModeBadge } from "@/components/trading/ModeBadge";
@@ -12,16 +13,30 @@ import { CryptoPriceBar } from "@/components/trading/CryptoPriceBar";
 import { MarketTabs } from "@/components/trading/MarketTabs";
 import { EquityCurve } from "@/components/charts/EquityCurve";
 import { PLHeatmap } from "@/components/charts/PLHeatmap";
-import Link from "next/link";
 
 const MARKET_LABELS: Record<string, string> = {
   polymarket: "Polymarket",
   crypto: "Crypto",
 };
 
-export default function TradingPage() {
+function TradingContent() {
+  const searchParams = useSearchParams();
   const [selectedMarket, setSelectedMarket] = useState<string>("all");
   const [cryptoSubTab, setCryptoSubTab] = useState<"spot" | "perps">("spot");
+
+  // Read market selection from URL query params (set by sidebar)
+  useEffect(() => {
+    const market = searchParams.get("market");
+    const sub = searchParams.get("sub");
+    if (market === "polymarket") {
+      setSelectedMarket("polymarket");
+    } else if (market === "crypto") {
+      setSelectedMarket("crypto");
+      if (sub === "perps") setCryptoSubTab("perps");
+      else setCryptoSubTab("spot");
+    }
+  }, [searchParams]);
+
   const { wallet, wallets, trades, connected } = useTradingWs();
   const { data: equityData } = useQuery({ queryKey: ["equity-curve"], queryFn: api.equityCurve });
   const { data: pnlData } = useQuery({ queryKey: ["daily-pnl"], queryFn: api.dailyPnl });
@@ -100,28 +115,10 @@ export default function TradingPage() {
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-500/3 rounded-full blur-3xl" />
       </div>
 
-      {/* Top Bar */}
-      <nav className="relative border-b border-slate-800/40 bg-slate-950/80 backdrop-blur-2xl sticky top-0 z-50">
-        <div className="max-w-[1600px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-5">
-            <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-[0_0_15px_rgba(52,211,153,0.3)] transition-all duration-300 group-hover:shadow-[0_0_25px_rgba(52,211,153,0.4)] group-hover:scale-105">
-                <span className="text-slate-950 font-black text-sm">T</span>
-              </div>
-              <span className="text-lg font-black text-white tracking-tight">Tradoshka</span>
-            </Link>
-            <div className="h-5 w-px bg-slate-800/60" />
-            <Link
-              href="/performance"
-              className="text-xs text-slate-500 hover:text-slate-200 transition-colors duration-300 font-medium"
-            >
-              Performance
-            </Link>
-            <span className="text-xs text-white font-bold relative">
-              Trading
-              <span className="absolute -bottom-1 left-0 w-full h-0.5 bg-emerald-400 rounded-full" />
-            </span>
-          </div>
+      <div className="relative max-w-[1600px] mx-auto px-6 py-6">
+        {/* Page header with status badges */}
+        <div className="flex items-center justify-between mb-5">
+          <h1 className="text-2xl font-black text-white tracking-tight">Trading</h1>
           <div className="flex items-center gap-4">
             <ModeBadge mode={wallet?.mode || "Dry"} />
             <div
@@ -144,9 +141,6 @@ export default function TradingPage() {
             </div>
           </div>
         </div>
-      </nav>
-
-      <div className="relative max-w-[1600px] mx-auto px-6 py-6">
         {/* Controls */}
         <div className="flex items-center gap-3 mb-5">
           <button
@@ -246,5 +240,13 @@ export default function TradingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function TradingPage() {
+  return (
+    <Suspense>
+      <TradingContent />
+    </Suspense>
   );
 }
