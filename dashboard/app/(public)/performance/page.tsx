@@ -103,7 +103,7 @@ export default function PerformancePage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
               { name: "Polymarket", status: "Active", color: "emerald" },
-              { name: "Crypto", status: "Coming Soon", color: "slate" },
+              { name: "Crypto", status: "Active", color: "emerald" },
               { name: "Forex", status: "Coming Soon", color: "slate" },
               { name: "Stocks", status: "Coming Soon", color: "slate" },
             ].map(m => (

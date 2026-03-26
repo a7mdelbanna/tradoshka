@@ -1,4 +1,4 @@
-import type { PortfolioResponse, EquityPoint, DailyPnl, StrategyPerformance, Stats, PositionInfo, RiskResponse, WalletResponse, TradeInfo, ReadinessResponse, OrchestratorStatus, CycleResult } from "./types";
+import type { PortfolioResponse, EquityPoint, DailyPnl, StrategyPerformance, Stats, PositionInfo, RiskResponse, WalletResponse, TradeInfo, ReadinessResponse, OrchestratorStatus, CycleResult, CryptoAsset } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -25,4 +25,6 @@ export const api = {
   orchestratorStatus: () => apiFetch<OrchestratorStatus>("/api/orchestrator"),
   triggerScan: () => apiFetch<object>("/api/orchestrator/scan", "POST"),
   triggerCycle: () => apiFetch<CycleResult>("/api/orchestrator/cycle", "POST"),
+  cryptoAssets: () => apiFetch<{ count: number; assets: CryptoAsset[] }>("/api/crypto/assets"),
+  cryptoScan: () => apiFetch<{ scanned: number; assets: object[] }>("/api/crypto/scan", "POST"),
 };

@@ -122,3 +122,9 @@ export interface CycleResult {
   trades_executed: number;
   trades: object[];
 }
+
+export interface CryptoAsset {
+  symbol: string;
+  price: string;
+  volume_24h: number;
+}
