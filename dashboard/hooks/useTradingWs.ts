@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { useWebSocket } from "./useWebSocket";
 import type { TradeInfo } from "@/lib/types";
 
-interface WalletUpdate {
+export interface WalletUpdate {
   mode: string;
   balance: string;
   equity: string;
@@ -11,10 +11,11 @@ interface WalletUpdate {
   realized_pnl: string;
   drawdown_pct: string;
   open_positions: number;
+  market?: string;
 }
 
 export function useTradingWs() {
-  const [wallet, setWallet] = useState<WalletUpdate | null>(null);
+  const [wallets, setWallets] = useState<Record<string, WalletUpdate>>({});
   const [trades, setTrades] = useState<TradeInfo[]>([]);
   const [connected, setConnected] = useState(false);
 
@@ -28,7 +29,9 @@ export function useTradingWs() {
     setConnected(true);
 
     if (msg.event === "wallet_update" && msg.data) {
-      setWallet(msg.data as unknown as WalletUpdate);
+      const update = msg.data as unknown as WalletUpdate;
+      const market = update.market || (msg.data.market as string) || "all";
+      setWallets(prev => ({ ...prev, [market]: update }));
     } else if (msg.event === "new_trade" && msg.data) {
       setTrades(prev => [msg.data as unknown as TradeInfo, ...prev].slice(0, 100));
     }
@@ -36,5 +39,8 @@ export function useTradingWs() {
 
   useWebSocket(WS_URL, handleMessage);
 
-  return { wallet, trades, connected };
+  // Provide a combined wallet for backward compatibility
+  const wallet = wallets["all"] || wallets["polymarket"] || wallets["crypto"] || null;
+
+  return { wallet, wallets, trades, connected };
 }
