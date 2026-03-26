@@ -309,6 +309,7 @@ pub async fn get_trades(State(state): State<SharedState>) -> Json<serde_json::Va
             "edge": t.edge_vs_market,
             "pnl": t.pnl.map(|p| p.to_string()),
             "closed": t.is_closed,
+            "market": format!("{:?}", t.market),
         })).collect::<Vec<_>>(),
         "total": state.trade_recorder.total_trade_count(),
     }))

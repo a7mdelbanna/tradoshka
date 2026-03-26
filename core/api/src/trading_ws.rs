@@ -66,6 +66,7 @@ async fn handle_trading_socket(mut socket: WebSocket, state: SharedState) {
                                 "strategy": trade.strategy_id,
                                 "strength": trade.signal_strength,
                                 "edge": trade.edge_vs_market,
+                                "market": format!("{:?}", trade.market),
                             }),
                         };
                         if let Ok(json) = serde_json::to_string(&trade_event) {
