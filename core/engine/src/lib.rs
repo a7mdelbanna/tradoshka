@@ -13,6 +13,7 @@ pub mod atr_stops;
 pub mod research;
 pub mod position_monitor;
 pub mod strategy_tier;
+pub mod mutation;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -29,3 +30,4 @@ pub use atr_stops::{StopCalculator, ExitLevels};
 pub use research::{ResearchEngine, ResearchConfig, MarketSnapshot};
 pub use position_monitor::{PositionMonitor, PositionCheck, PositionAction};
 pub use strategy_tier::{StrategyTierTracker, Tier};
+pub use mutation::{StrategyParams, MutationResult, mutate, initial_strategies};
