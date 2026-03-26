@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::wallet::SimulatedWallet;
 use crate::trade_recorder::TradeRecorder;
 use crate::mutation::StrategyParams;
+use crate::indicator_state::StrategyIndicatorEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SlotStatus {
@@ -28,11 +29,14 @@ pub struct StrategySlot {
     pub wallet: SimulatedWallet,
     #[serde(skip)]
     pub recorder: TradeRecorder,
+    #[serde(skip)]
+    pub indicators: StrategyIndicatorEngine,
     pub cause_of_death: Option<String>,
 }
 
 impl StrategySlot {
     pub fn new(name: &str, market: &str, params: StrategyParams, initial_balance: Decimal) -> Self {
+        let indicators = StrategyIndicatorEngine::from_params(&params);
         Self {
             name: name.into(),
             market: market.into(),
@@ -44,10 +48,10 @@ impl StrategySlot {
             generation: 1,
             wallet: SimulatedWallet::new(initial_balance, dec!(5)),
             recorder: TradeRecorder::new(),
+            indicators,
             cause_of_death: None,
         }
     }
-
     pub fn with_parent(mut self, parent: &str, gen: u32) -> Self {
         self.parent = Some(parent.into());
         self.generation = gen;
@@ -82,15 +86,16 @@ impl StrategySlot {
 
     /// Calculate Sharpe ratio from daily returns. Simplified: use PnL / hours as proxy.
     pub fn sharpe_ratio(&self) -> f64 {
-        let hours = (Utc::now() - self.created_at).num_hours().max(1) as f64;
+        let minutes = (Utc::now() - self.created_at).num_minutes().max(1) as f64;
         let pnl = self.pnl_pct();
-        let hourly_return = pnl / hours;
-        // Simplified Sharpe: hourly_return / estimated_volatility
-        // Use PnL magnitude as volatility proxy
-        let vol = pnl.abs().max(0.1);
-        hourly_return / vol * (24.0_f64 * 365.0).sqrt()
+        let trade_count = self.trade_count() as f64;
+        if trade_count == 0.0 { return 0.0; }
+        // Raw PnL annualized then divided by baseline vol. Different EMA periods produce
+        // different pnl magnitudes, so Sharpe values diverge even within the first cycle.
+        let annualized_pnl = pnl * (525_960.0_f64 / minutes).sqrt();
+        let baseline_vol = 0.5_f64 * trade_count.sqrt();
+        annualized_pnl / baseline_vol
     }
-
     pub fn age_hours(&self) -> i64 {
         (Utc::now() - self.created_at).num_hours()
     }
