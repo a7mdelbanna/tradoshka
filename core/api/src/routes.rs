@@ -200,59 +200,122 @@ pub async fn trigger_crypto_scan(
 // Dashboard
 // ---------------------------------------------------------------------------
 
-pub async fn get_equity_curve() -> Json<Vec<serde_json::Value>> {
+pub async fn get_equity_curve(State(state): State<SharedState>) -> Json<Vec<serde_json::Value>> {
+    let state = state.read().await;
     let mut data = Vec::new();
+    let equity = state.wallet.equity().to_f64().unwrap_or(100.0);
     let now = chrono::Utc::now();
-    let mut value = 100.0_f64;
-    for i in 0..30 {
-        let date = now - chrono::Duration::days(30 - i);
-        let seed = ((i * 1103515245 + 12345) & 0x7fffffff) as f64;
-        let r = seed / 0x7fffffff as f64;
-        value += (r - 0.3) * 5.0;
-        value = value.max(50.0);
+
+    // If we have trades, build from trade history
+    let trades = state.trade_recorder.all_trades();
+    if !trades.is_empty() {
+        // Start point
         data.push(serde_json::json!({
-            "time": date.format("%Y-%m-%d").to_string(),
-            "value": (value * 100.0).round() / 100.0,
+            "time": trades[0].timestamp.format("%Y-%m-%d").to_string(),
+            "value": 100.0,
+        }));
+        // Current point
+        data.push(serde_json::json!({
+            "time": now.format("%Y-%m-%d").to_string(),
+            "value": equity,
+        }));
+    } else {
+        // No trades — flat line at initial balance
+        data.push(serde_json::json!({
+            "time": now.format("%Y-%m-%d").to_string(),
+            "value": 100.0,
         }));
     }
+
     Json(data)
 }
 
-pub async fn get_daily_pnl() -> Json<Vec<serde_json::Value>> {
-    let mut data = Vec::new();
-    let now = chrono::Utc::now();
-    for i in 0..90 {
-        let date = now - chrono::Duration::days(90 - i);
-        let seed = ((i * 7 * 1103515245 + 12345) & 0x7fffffff) as f64;
-        let r = seed / 0x7fffffff as f64;
-        let pnl = (r - 0.4) * 20.0;
-        data.push(serde_json::json!({
-            "date": date.format("%Y-%m-%d").to_string(),
-            "pnl": (pnl * 100.0).round() / 100.0,
-        }));
-    }
+pub async fn get_daily_pnl(State(state): State<SharedState>) -> Json<Vec<serde_json::Value>> {
+    let state = state.read().await;
+    let daily = state.trade_recorder.daily_pnl();
+
+    let data: Vec<serde_json::Value> = daily.iter().map(|(date, pnl)| {
+        serde_json::json!({
+            "date": date,
+            "pnl": pnl.to_f64().unwrap_or(0.0),
+        })
+    }).collect();
+
     Json(data)
 }
 
-pub async fn get_strategies() -> Json<Vec<serde_json::Value>> {
-    Json(vec![
-        serde_json::json!({"name": "AI Predictor", "return_pct": 12.5, "trades": 45, "win_rate": 0.64}),
-        serde_json::json!({"name": "Copy Trading", "return_pct": 8.3, "trades": 32, "win_rate": 0.59}),
-        serde_json::json!({"name": "Market Making", "return_pct": 5.1, "trades": 128, "win_rate": 0.72}),
-        serde_json::json!({"name": "Arbitrage", "return_pct": 3.2, "trades": 18, "win_rate": 0.89}),
-    ])
+pub async fn get_strategies(State(state): State<SharedState>) -> Json<Vec<serde_json::Value>> {
+    let state = state.read().await;
+    let recorder = &state.trade_recorder;
+
+    // Get unique strategy IDs from trade history
+    let mut strategy_stats: std::collections::HashMap<String, (f64, u64, u64)> = std::collections::HashMap::new();
+
+    for trade in recorder.all_trades() {
+        let entry = strategy_stats.entry(trade.strategy_id.clone()).or_insert((0.0, 0, 0));
+        entry.1 += 1; // total trades
+        if trade.is_closed {
+            if let Some(pnl) = trade.pnl {
+                entry.0 += pnl.to_f64().unwrap_or(0.0);
+                if pnl > rust_decimal::Decimal::ZERO {
+                    entry.2 += 1; // winning trades
+                }
+            }
+        }
+    }
+
+    // If no trades yet, return empty
+    if strategy_stats.is_empty() {
+        return Json(vec![]);
+    }
+
+    let mut result: Vec<serde_json::Value> = strategy_stats.iter().map(|(name, (pnl, total, wins))| {
+        let initial = 100.0_f64; // Starting equity
+        let return_pct = (pnl / initial) * 100.0;
+        let win_rate = if *total > 0 { *wins as f64 / *total as f64 } else { 0.0 };
+        serde_json::json!({
+            "name": name,
+            "return_pct": (return_pct * 10.0).round() / 10.0,
+            "trades": total,
+            "win_rate": (win_rate * 100.0).round() / 100.0,
+        })
+    }).collect();
+
+    result.sort_by(|a, b| {
+        let pa = a["return_pct"].as_f64().unwrap_or(0.0);
+        let pb = b["return_pct"].as_f64().unwrap_or(0.0);
+        pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Json(result)
 }
 
-pub async fn get_stats() -> Json<serde_json::Value> {
+pub async fn get_stats(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let recorder = &state.trade_recorder;
+    let wallet = &state.wallet;
+
+    let closed = recorder.closed_trade_count();
+    let wins = recorder.winning_trade_count();
+    let win_rate = if closed > 0 { wins as f64 / closed as f64 } else { 0.0 };
+
+    let gross_profit = recorder.gross_profit().to_f64().unwrap_or(0.0);
+    let gross_loss = recorder.gross_loss().to_f64().unwrap_or(0.0);
+    let profit_factor = if gross_loss > 0.0 { gross_profit / gross_loss } else { 0.0 };
+
+    let equity = wallet.equity().to_f64().unwrap_or(100.0);
+    let total_roi = ((equity - 100.0) / 100.0) * 100.0;
+    let max_dd = wallet.drawdown_pct().to_f64().unwrap_or(0.0) * 100.0;
+
     Json(serde_json::json!({
-        "total_roi": 29.1,
-        "sharpe": 1.85,
-        "max_drawdown": 8.3,
-        "calmar": 3.51,
-        "win_rate": 0.67,
-        "profit_factor": 2.14,
-        "total_trades": 223,
-        "recovery_factor": 3.5,
+        "total_roi": (total_roi * 10.0).round() / 10.0,
+        "sharpe": 0.0,
+        "max_drawdown": (max_dd * 10.0).round() / 10.0,
+        "calmar": 0.0,
+        "win_rate": (win_rate * 100.0).round() / 100.0 / 100.0,
+        "profit_factor": (profit_factor * 100.0).round() / 100.0,
+        "total_trades": recorder.total_trade_count(),
+        "recovery_factor": 0.0,
     }))
 }
 

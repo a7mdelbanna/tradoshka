@@ -12,6 +12,20 @@ const STRATEGY_COLORS: Record<string, { bar: string; text: string; bg: string }>
 const DEFAULT_COLOR = { bar: "bg-slate-400", text: "text-slate-400", bg: "bg-slate-400/10" };
 
 export function StrategyBreakdown({ strategies }: { strategies: Strategy[] }) {
+  if (strategies.length === 0) {
+    return (
+      <div>
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-white">Strategy Performance</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Returns by strategy</p>
+        </div>
+        <div className="flex items-center justify-center h-[200px] text-slate-500 text-sm">
+          No strategies active yet
+        </div>
+      </div>
+    );
+  }
+
   const maxReturn = Math.max(...strategies.map((s) => Math.abs(s.return_pct)), 1);
 
   return (

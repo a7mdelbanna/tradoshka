@@ -39,6 +39,20 @@ export function EquityCurve({ data }: Props) {
     return () => { window.removeEventListener("resize", resize); chart.remove(); };
   }, [data]);
 
+  if (data.length === 0) {
+    return (
+      <div className="w-full">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-white">Equity Curve</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Portfolio value over time</p>
+        </div>
+        <div className="flex items-center justify-center h-[380px] text-slate-500 text-sm">
+          No data yet
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full">
       <div className="flex items-center justify-between mb-4">
