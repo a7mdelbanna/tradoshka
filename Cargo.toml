@@ -7,6 +7,7 @@ members = [
     "core/engine",
     "core/api",
     "bridge",
+    "markets/polymarket",
 ]
 
 [workspace.package]
@@ -27,3 +28,10 @@ anyhow = "1.0"
 async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+url = "2.5"

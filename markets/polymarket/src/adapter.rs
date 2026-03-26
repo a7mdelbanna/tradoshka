@@ -1,0 +1,1 @@
+// MarketAdapter implementation stub
