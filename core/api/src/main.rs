@@ -1053,11 +1053,27 @@ async fn run_trading_loop(state: SharedState) {
 
                             if !should_trade { continue; }
 
-                            // Calculate position size
+                            // Volume confirmation: skip low-volume tokens
+                            if token.volume_5m < 500.0 { continue; } // Need >$500 in 5-min vol
+
+                            // Min liquidity: only buy into deep enough markets
+                            if token.liquidity_usd < 10000.0 { continue; } // >$10K liquidity
+
+                            // Price change filter: skip tokens already dumping hard
+                            if token.price_change_5m < -10.0 { continue; } // Skip tokens down >10% in 5 min
+
+                            // Max market cap for mc_snipe (early detection = small caps only)
+                            if strategy_type == "mc_snipe" {
+                                let max_mcap = slot.params.get("max_mcap");
+                                if max_mcap > 0.0 && token.market_cap > max_mcap { continue; }
+                            }
+
+                            // Calculate position size — capped at $5 max per meme coin trade
                             let equity = slot.wallet.equity();
-                            let per_position = equity
+                            let per_position = (equity
                                 * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
-                                / rust_decimal::Decimal::from(max_positions as u32);
+                                / rust_decimal::Decimal::from(max_positions as u32))
+                                .min(rust_decimal_macros::dec!(5)); // Max $5 per meme coin position
                             let price = rust_decimal::Decimal::from_f64(token.price_usd).unwrap_or(rust_decimal_macros::dec!(0));
                             if price <= rust_decimal::Decimal::ZERO { continue; }
                             let size = (per_position / price).round_dp(0);
@@ -1072,10 +1088,18 @@ async fn run_trading_loop(state: SharedState) {
                                 size,
                                 slot_name,
                             ) {
-                                let hard_stop = price * rust_decimal_macros::dec!(0.70); // -30% stop
+                                let hard_stop = price * rust_decimal_macros::dec!(0.85); // -15% stop (was -30%)
                                 let take_profit = price
                                     * rust_decimal::Decimal::from_f64(target_mult)
                                         .unwrap_or(rust_decimal_macros::dec!(2));
+
+                                // Time stop: shorter for meme coins — they move fast
+                                let time_hours = match strategy_type.as_str() {
+                                    "mc_snipe" => 0, // position monitor handles snipe exits in minutes
+                                    "mc_trend" => 1,
+                                    "mc_whale" => 1,
+                                    _ => 1,
+                                };
 
                                 slot.recorder.record(make_trade_record(
                                     &token.address,
@@ -1102,9 +1126,9 @@ async fn run_trading_loop(state: SharedState) {
                                         entry_price: price,
                                         entry_reason: format!("{} at ${}", token.symbol, token.price_usd),
                                         hard_stop_loss: hard_stop,
-                                        trailing_stop: price * rust_decimal_macros::dec!(0.85),
+                                        trailing_stop: price * rust_decimal_macros::dec!(0.90), // 10% trailing (tighter)
                                         take_profit,
-                                        time_stop_hours: 1,
+                                        time_stop_hours: time_hours,
                                         thesis_invalidation: "Safety score drops or volume dies".into(),
                                         risk_per_trade_pct: 1.0,
                                         risk_amount: per_position,
@@ -1161,6 +1185,62 @@ async fn run_trading_loop(state: SharedState) {
                         for name in &mc_slot_names {
                             if let Some(slot) = s.strategy_manager.get_mut(name) {
                                 slot.wallet.update_prices(&mc_prices);
+                            }
+                        }
+                    }
+                }
+
+                // Position monitor for MC-* strategy wallets — tighter stops for meme coins
+                {
+                    let mut s = state.write().await;
+                    let mc_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("MC-") && sl.trade_count() > 0)
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &mc_slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) => sl,
+                            None => continue,
+                        };
+
+                        let pos_keys: Vec<(String, rust_decimal::Decimal, rust_decimal::Decimal, chrono::DateTime<chrono::Utc>)> =
+                            slot.wallet.positions().iter().map(|(k, p)| {
+                                (k.clone(), p.current_price, p.avg_price, p.opened_at)
+                            }).collect();
+
+                        for (pos_key, current_price, entry_price, opened_at) in &pos_keys {
+                            if *entry_price <= rust_decimal::Decimal::ZERO { continue; }
+
+                            let pnl_pct = ((*current_price - *entry_price) / *entry_price
+                                * rust_decimal::Decimal::new(100, 0))
+                                .to_f64().unwrap_or(0.0);
+                            let mins_held = (chrono::Utc::now() - *opened_at).num_minutes();
+
+                            let should_close =
+                                pnl_pct <= -15.0 ||                             // Hard stop: -15%
+                                (mins_held >= 15 && pnl_pct < 5.0) ||          // Time stop: 15 min with <5% gain
+                                (pnl_pct >= 100.0) ||                           // Take profit: 2x
+                                (mins_held >= 60);                              // Absolute max hold: 1 hour
+
+                            if should_close {
+                                // pos_key is "token_address:strategy_id" — extract token address
+                                let token_address = pos_key.split(':').next().unwrap_or(pos_key.as_str());
+                                if let Some((_, _, pnl)) = slot.wallet.sell(
+                                    token_address, *current_price,
+                                    rust_decimal::Decimal::MAX, slot_name,
+                                ) {
+                                    slot.recorder.close_trade(token_address, slot_name, pnl);
+                                    let reason = if pnl_pct <= -15.0 { "hard stop -15%" }
+                                        else if mins_held >= 60 { "max time 60min" }
+                                        else if pnl_pct >= 100.0 { "take profit 2x" }
+                                        else { "time stop 15min" };
+                                    tracing::info!(
+                                        "MC STOP: {} | {} | {} | PnL: {:.1}% | held {}min",
+                                        slot_name, token_address, reason, pnl_pct, mins_held
+                                    );
+                                }
                             }
                         }
                     }

@@ -73,16 +73,16 @@ impl SafetyFilter {
     }
 
     /// Quick safety check using only data available from DexScreener (no on-chain).
-    /// Assumes best case for unknown fields.
+    /// Assumes realistic worst-case for unknown fields to avoid over-optimistic filtering.
     pub fn quick_check(&self, token: &MemeToken) -> SafetyReport {
         self.check(
             token,
-            5.0,   // assume dev wallet is 5% (moderate)
-            10.0,  // assume top holder is 10%
-            true,  // assume mint revoked (optimistic)
+            8.0,   // assume dev wallet is 8% (realistic — many meme devs hold 5-10%)
+            12.0,  // assume top holder is 12% (realistic concentration)
+            false, // assume mint NOT revoked (conservative — most new meme coins don't revoke)
             false, // assume not honeypot
-            1.0,   // assume 1% buy tax
-            1.0,   // assume 1% sell tax
+            3.0,   // assume 3% buy tax (realistic for meme coins)
+            3.0,   // assume 3% sell tax (realistic for meme coins)
         )
     }
 
@@ -176,8 +176,10 @@ mod tests {
     fn test_quick_check_uses_defaults() {
         let filter = SafetyFilter::new();
         let report = filter.quick_check(&test_token());
-        // With all optimistic defaults and good liquidity, should pass everything
-        assert!(report.score >= 80);
+        // Realistic defaults: mint NOT revoked (-15pts), so score is ~65
+        // This is intentionally lower to filter risky tokens more aggressively
+        assert!(report.score >= 60);
+        assert!(report.score < 85); // Should NOT be near-perfect anymore
     }
 
     #[test]

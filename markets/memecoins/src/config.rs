@@ -22,7 +22,7 @@ pub const SCAN_TRENDING_SECS: u64 = 300;
 pub const SCAN_WHALES_SECS: u64 = 300;
 
 // Safety thresholds
-pub const MIN_LIQUIDITY_USD: f64 = 5000.0;
+pub const MIN_LIQUIDITY_USD: f64 = 10000.0;  // was 5000 — higher floor filters thin markets
 pub const MAX_DEV_WALLET_PCT: f64 = 10.0;
 pub const MAX_WHALE_CONCENTRATION_PCT: f64 = 15.0;
 pub const MAX_TAX_PCT: f64 = 10.0;
