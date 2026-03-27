@@ -325,9 +325,11 @@ async fn run_trading_loop(state: SharedState) {
 
                             // Pre-fill with synthetic price history on first tick so strategies
                             // diverge immediately (each has a unique name-hash random walk).
+                            // IMPORTANT: walk_size must be ~1.5% of price to produce realistic ATR.
+                            // With 0.1% walk, ATR was 0.05% → SL/TP within bid-ask noise → 95% loss rate.
                             if !slot.indicators.get(&asset.symbol).map(|i| i.has_data(2)).unwrap_or(false) {
                                 let hash = slot_name.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
-                                let walk_size = price_f64 * 0.001;
+                                let walk_size = price_f64 * 0.015; // 1.5% volatility — realistic for crypto
                                 for i in 0..30u64 {
                                     let noise = ((hash.wrapping_add(i) % 100) as f64 - 50.0) / 50.0 * walk_size;
                                     slot.indicators.update(&asset.symbol, price_f64 + noise);
@@ -918,9 +920,10 @@ async fn run_trading_loop(state: SharedState) {
 
                             // Pre-fill with synthetic price history on first tick so CP-* strategies
                             // diverge immediately (each has a unique name-hash random walk).
+                            // IMPORTANT: walk_size must be ~1.5% of price to produce realistic ATR.
                             if !slot.indicators.get(&asset.symbol).map(|i| i.has_data(2)).unwrap_or(false) {
                                 let hash = slot_name.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
-                                let walk_size = price_f64 * 0.001;
+                                let walk_size = price_f64 * 0.015; // 1.5% — realistic crypto volatility
                                 for i in 0..30u64 {
                                     let noise = ((hash.wrapping_add(i) % 100) as f64 - 50.0) / 50.0 * walk_size;
                                     slot.indicators.update(&asset.symbol, price_f64 + noise);
