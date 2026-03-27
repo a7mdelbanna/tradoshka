@@ -4,6 +4,7 @@ use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedW
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
 use tradoshka_crypto::adapter::CryptoAdapter;
+use tradoshka_memecoins::adapter::MemeCoinAdapter;
 use rust_decimal_macros::dec;
 
 pub type SharedState = Arc<RwLock<AppState>>;
@@ -43,6 +44,8 @@ pub struct AppState {
     pub basket_consensus: BasketConsensus,
     pub copy_engine: CopyEngine,
     pub copy_circuit_breaker: CopyCircuitBreaker,
+    // Meme coin market adapter
+    pub memecoins: MemeCoinAdapter,
 }
 
 impl AppState {
@@ -70,7 +73,7 @@ impl AppState {
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),
             crypto_data: CryptoDataService::new(),
             strategy_manager: {
-                let mut strategy_manager = StrategyWalletManager::new(150, 20, dec!(100));
+                let mut strategy_manager = StrategyWalletManager::new(200, 25, dec!(100));
                 strategy_manager.initialize_defaults();
                 strategy_manager
             },
@@ -80,6 +83,7 @@ impl AppState {
             basket_consensus: BasketConsensus::new(),
             copy_engine: CopyEngine::new(),
             copy_circuit_breaker: CopyCircuitBreaker::new(100.0), // $100 per strategy
+            memecoins: MemeCoinAdapter::new(),
         }
     }
 

@@ -7,6 +7,7 @@ use tradoshka_engine::TradeRecord;
 use tradoshka_common::types::{Market, OrderSide};
 use tradoshka_engine::TrackedCryptoAsset;
 use tradoshka_engine::{ResearchEngine, ResearchConfig, MarketSnapshot};
+use tradoshka_memecoins as _; // ensure crate is linked
 
 /// Helper to construct a TradeRecord from thesis fields — avoids repetition across CS/PM/CP blocks.
 fn make_trade_record(
@@ -114,19 +115,22 @@ async fn run_trading_loop(state: SharedState) {
                 let pm_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-")).count();
                 let cs_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-")).count();
                 let cp_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-")).count();
+                let mc_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-")).count();
 
                 let pm_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-") && s.trade_count() > 0).count();
                 let cs_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-") && s.trade_count() > 0).count();
                 let cp_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-") && s.trade_count() > 0).count();
+                let mc_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-") && s.trade_count() > 0).count();
 
-                tracing::info!("HEALTH CHECK: alive={}, dead={} | PM: {}/{} trading | CS: {}/{} trading | CP: {}/{} trading | Evolution hour: {}",
+                tracing::info!("HEALTH CHECK: alive={}, dead={} | PM: {}/{} trading | CS: {}/{} trading | CP: {}/{} trading | MC: {}/{} trading | Evolution hour: {}",
                     alive, dead, pm_trading, pm_alive, cs_trading, cs_alive, cp_trading, cp_alive,
-                    s.evolution_engine.hour);
+                    mc_trading, mc_alive, s.evolution_engine.hour);
 
                 // Alert if any market has 0 trading strategies
                 if pm_alive == 0 { tracing::warn!("ALERT: No PM strategies alive!"); }
                 if cs_alive == 0 { tracing::warn!("ALERT: No CS strategies alive!"); }
                 if cp_alive == 0 { tracing::warn!("ALERT: No CP strategies alive!"); }
+                if mc_alive == 0 { tracing::warn!("ALERT: No MC strategies alive!"); }
             }
             _ = scan_ticker.tick() => {
                 let mut s = state.write().await;
@@ -985,6 +989,169 @@ async fn run_trading_loop(state: SharedState) {
                                     thesis.reasoning.chars().take(50).collect::<String>()
                                 );
                             }
+                        }
+                    }
+                }
+
+                // --- Meme Coin strategy trading: route MC-* wallets ---
+                {
+                    // Phase 1: scan for tokens (needs write lock for scanner)
+                    let tokens: Vec<tradoshka_memecoins::types::MemeToken> = {
+                        let mut s = state.write().await;
+                        s.memecoins.scanner.scan_trending().await
+                    };
+
+                    // Phase 2: pre-compute safety scores and whale consensus (read-only from memecoins)
+                    // This avoids the borrow conflict when we later mutably borrow strategy_manager.
+                    let token_meta: Vec<(u32, usize)> = {
+                        let s = state.read().await;
+                        tokens.iter().map(|token| {
+                            let safety = s.memecoins.safety.quick_check(token);
+                            let whale_consensus = s.memecoins.whale_tracker.consensus_count(&token.address);
+                            (safety.score, whale_consensus)
+                        }).collect()
+                    };
+
+                    // Phase 3: trade execution (write lock, strategy_manager mutably borrowed)
+                    let mut s = state.write().await;
+                    let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
+
+                    let mc_slots: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("MC-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &mc_slots {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) if sl.is_alive() => sl,
+                            _ => continue,
+                        };
+
+                        let min_safety = slot.params.get("min_safety") as u32;
+                        let target_mult = slot.params.get("target_mult").max(1.1);
+                        let capital_pct = (slot.params.get("capital_usage_pct") / 100.0).max(0.1).min(1.0);
+                        let max_positions = slot.params.get("auto_position_count").max(1.0) as usize;
+                        let strategy_type = slot.params.strategy_type.clone();
+
+                        for (token, (safety_score, whale_consensus)) in tokens.iter().zip(token_meta.iter()) {
+                            if slot.wallet.open_position_count() >= max_positions { break; }
+
+                            // Skip if already have position in this token
+                            if slot.wallet.positions().keys().any(|k| k.starts_with(&format!("{}:", token.address))) { continue; }
+
+                            // Safety check (pre-computed)
+                            if *safety_score < min_safety { continue; }
+
+                            // Strategy-specific filtering
+                            let should_trade = match strategy_type.as_str() {
+                                "mc_snipe" => token.is_new() || token.volume_surge(),
+                                "mc_trend" => token.price_change_1h > 10.0 || token.volume_surge(),
+                                "mc_whale" => *whale_consensus >= 2 || token.volume_24h > 50000.0,
+                                _ => token.volume_24h > 10000.0,
+                            };
+
+                            if !should_trade { continue; }
+
+                            // Calculate position size
+                            let equity = slot.wallet.equity();
+                            let per_position = equity
+                                * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
+                                / rust_decimal::Decimal::from(max_positions as u32);
+                            let price = rust_decimal::Decimal::from_f64(token.price_usd).unwrap_or(rust_decimal_macros::dec!(0));
+                            if price <= rust_decimal::Decimal::ZERO { continue; }
+                            let size = (per_position / price).round_dp(0);
+                            if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                            // Execute buy
+                            if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                &token.address,
+                                &format!("{} ({})", token.symbol, token.name),
+                                "Long",
+                                price,
+                                size,
+                                slot_name,
+                            ) {
+                                let hard_stop = price * rust_decimal_macros::dec!(0.70); // -30% stop
+                                let take_profit = price
+                                    * rust_decimal::Decimal::from_f64(target_mult)
+                                        .unwrap_or(rust_decimal_macros::dec!(2));
+
+                                slot.recorder.record(make_trade_record(
+                                    &token.address,
+                                    &format!("{} Meme", token.symbol),
+                                    "Long",
+                                    tradoshka_common::types::OrderSide::Buy,
+                                    tradoshka_common::types::Market::Crypto,
+                                    filled,
+                                    fill_price,
+                                    fee,
+                                    slot_name,
+                                    &tradoshka_engine::TradeThesis {
+                                        reasoning: format!(
+                                            "MEME COIN: {} ({}) on Solana. Safety: {}/100. \
+                                             MCap: ${:.0}. Vol24h: ${:.0}. Change1h: {:.1}%. Strategy: {}",
+                                            token.symbol, token.name, safety_score,
+                                            token.market_cap, token.volume_24h,
+                                            token.price_change_1h, slot_name
+                                        ),
+                                        signals_used: vec!["safety_check".into(), "volume_analysis".into()],
+                                        signals_agreed: 2,
+                                        signals_total: 2,
+                                        confidence: (*safety_score as f64) / 100.0,
+                                        entry_price: price,
+                                        entry_reason: format!("{} at ${}", token.symbol, token.price_usd),
+                                        hard_stop_loss: hard_stop,
+                                        trailing_stop: price * rust_decimal_macros::dec!(0.85),
+                                        take_profit,
+                                        time_stop_hours: 1,
+                                        thesis_invalidation: "Safety score drops or volume dies".into(),
+                                        risk_per_trade_pct: 1.0,
+                                        risk_amount: per_position,
+                                        reward_risk_ratio: target_mult,
+                                        position_size: size,
+                                        max_loss: per_position,
+                                        strategy_tier: "Unproven".into(),
+                                    },
+                                ));
+
+                                // SAFETY: data_logger is a disjoint field from strategy_manager.
+                                unsafe {
+                                    (*data_logger).log_trade(&serde_json::json!({
+                                        "type": "MEME_COIN",
+                                        "strategy": slot_name,
+                                        "token": token.symbol,
+                                        "address": token.address,
+                                        "price": token.price_usd,
+                                        "safety_score": safety_score,
+                                        "mcap": token.market_cap,
+                                        "volume_24h": token.volume_24h,
+                                    }));
+                                }
+
+                                tracing::info!(
+                                    "MEME {} BUY {} {} @ {} | safety={}/100 vol24h=${:.0} mcap=${:.0} | {}",
+                                    slot_name, filled, token.symbol, fill_price,
+                                    safety_score, token.volume_24h, token.market_cap,
+                                    token.name.chars().take(30).collect::<String>()
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Update MC-* strategy wallet prices (use crypto prices as proxy for now)
+                {
+                    let mut s = state.write().await;
+                    let prices = s.crypto_data.current_prices();
+                    let mc_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("MC-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+                    for name in &mc_slot_names {
+                        if let Some(slot) = s.strategy_manager.get_mut(name) {
+                            slot.wallet.update_prices(&prices);
                         }
                     }
                 }

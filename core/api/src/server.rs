@@ -17,6 +17,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/risk", get(routes::get_risk))
         .route("/api/markets/polymarket", get(routes::get_polymarket_status))
         .route("/api/markets/crypto", get(routes::get_crypto_status))
+        .route("/api/markets/memecoins", get(routes::get_memecoins_status))
         .route("/api/crypto/assets", get(routes::get_crypto_assets))
         .route("/api/crypto/scan", post(routes::trigger_crypto_scan))
         .route("/api/wallet", get(routes::get_wallet))

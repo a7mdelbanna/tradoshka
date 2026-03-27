@@ -667,6 +667,22 @@ pub async fn get_trades_by_market(
 }
 
 // ---------------------------------------------------------------------------
+// Meme Coins
+// ---------------------------------------------------------------------------
+
+pub async fn get_memecoins_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    Json(serde_json::json!({
+        "market": "memecoins",
+        "tracked_tokens": state.memecoins.scanner.tracked_count(),
+        "whale_count": state.memecoins.whale_tracker.whale_count(),
+        "blacklist_count": state.memecoins.safety.blacklist_count(),
+        "rug_count": state.memecoins.safety.rug_count(),
+        "status": "active",
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Copy Trading
 // ---------------------------------------------------------------------------
 

@@ -264,28 +264,28 @@ mod tests {
 
     #[test]
     fn test_manager_initialize() {
-        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
+        let mut mgr = StrategyWalletManager::new(200, 20, dec!(100));
         mgr.initialize_defaults();
-        assert_eq!(mgr.alive_count(), 120);
+        assert_eq!(mgr.alive_count(), 160);
         assert_eq!(mgr.dead_count(), 0);
     }
 
     #[test]
     fn test_manager_rank() {
-        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
+        let mut mgr = StrategyWalletManager::new(200, 20, dec!(100));
         mgr.initialize_defaults();
         let ranked = mgr.rank_by_sharpe(0); // Include all (even 0 trades)
-        assert_eq!(ranked.len(), 120);
+        assert_eq!(ranked.len(), 160);
     }
 
     #[test]
     fn test_can_kill_respects_minimum() {
-        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
+        let mut mgr = StrategyWalletManager::new(200, 20, dec!(100));
         mgr.initialize_defaults();
-        assert!(mgr.can_kill()); // 120 > 20
+        assert!(mgr.can_kill()); // 160 > 20
 
         // Kill down to 20
-        let names: Vec<String> = mgr.alive_slots().iter().take(100).map(|s| s.name.clone()).collect();
+        let names: Vec<String> = mgr.alive_slots().iter().take(140).map(|s| s.name.clone()).collect();
         for name in names {
             mgr.get_mut(&name).unwrap().kill("test");
         }
@@ -294,9 +294,9 @@ mod tests {
 
     #[test]
     fn test_can_spawn_respects_maximum() {
-        let mut mgr = StrategyWalletManager::new(120, 20, dec!(100));
+        let mut mgr = StrategyWalletManager::new(160, 20, dec!(100));
         mgr.initialize_defaults();
-        assert!(!mgr.can_spawn()); // 120 == 120, can't spawn more
+        assert!(!mgr.can_spawn()); // 160 == 160, can't spawn more
     }
 
     #[test]

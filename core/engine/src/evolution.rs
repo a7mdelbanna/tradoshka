@@ -59,7 +59,7 @@ impl EvolutionEngine {
         let mut all_spawned = Vec::new();
 
         // Run evolution separately per market
-        for market_prefix in &["PM-", "CS-", "CP-"] {
+        for market_prefix in &["PM-", "CS-", "CP-", "MC-"] {
             let (killed, spawned) = self.evolve_market(manager, market_prefix);
             all_killed.extend(killed);
             all_spawned.extend(spawned);
@@ -272,7 +272,7 @@ mod tests {
     use super::*;
 
     fn setup_manager() -> StrategyWalletManager {
-        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
+        let mut mgr = StrategyWalletManager::new(200, 20, dec!(100));
         mgr.initialize_defaults();
         mgr
     }
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(report.hour, 1);
         assert_eq!(report.killed.len(), 0);
         assert_eq!(report.spawned.len(), 0);
-        assert_eq!(report.alive_count, 120);
+        assert_eq!(report.alive_count, 160);
     }
 
     #[test]
@@ -302,9 +302,9 @@ mod tests {
         engine.min_trades_for_ranking = 0; // Rank even with 0 trades
         let mut mgr = setup_manager();
         let report = engine.evolve(&mut mgr);
-        // 120 strategies, bottom 10% = 12 killed, top 10% = 12 spawned
+        // 160 strategies, bottom 10% = 16 killed per market group, some spawned
         assert!(report.killed.len() >= 1);
-        assert!(report.alive_count < 122); // Some killed, some spawned
+        assert!(report.alive_count < 162); // Some killed, some spawned
     }
 
     #[test]
@@ -320,9 +320,9 @@ mod tests {
     fn test_evolve_respects_min_alive() {
         let mut engine = EvolutionEngine::new();
         engine.min_trades_for_ranking = 0;
-        let mut mgr = StrategyWalletManager::new(150, 115, dec!(100)); // min_alive = 115
-        mgr.initialize_defaults(); // 120 alive
-        // Can only kill 5 (120 - 115 = 5 buffer)
+        let mut mgr = StrategyWalletManager::new(200, 155, dec!(100)); // min_alive = 155
+        mgr.initialize_defaults(); // 160 alive
+        // Can only kill 5 (160 - 155 = 5 buffer)
         let report = engine.evolve(&mut mgr);
         assert!(mgr.alive_count() >= 115);
     }
