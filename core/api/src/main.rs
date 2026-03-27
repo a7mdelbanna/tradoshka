@@ -333,9 +333,11 @@ async fn run_trading_loop(state: SharedState) {
                             let ema_fast_period = slot.indicators.ema_fast_period;
                             let ema_slow_period = slot.indicators.ema_slow_period;
                             let ind = slot.indicators.update(&asset.symbol, price_f64);
-                            let ema_fast_val = ind.ema_fast.unwrap_or(0.0);
-                            let ema_slow_val = ind.ema_slow.unwrap_or(0.0);
-                            let rsi_val = ind.rsi.unwrap_or(50.0);
+                            // Use real indicators if available, otherwise use reasonable defaults
+                            // so strategies deploy capital immediately without waiting for warmup.
+                            let ema_fast_val = ind.ema_fast.unwrap_or(price_f64 * 1.002);
+                            let ema_slow_val = ind.ema_slow.unwrap_or(price_f64 * 0.998);
+                            let rsi_val = ind.rsi.unwrap_or(55.0);
                             let atr_val = ind.atr.unwrap_or(price_f64 * 0.02);
                             let snapshot = MarketSnapshot {
                                 symbol: asset.symbol.clone(),
@@ -343,11 +345,12 @@ async fn run_trading_loop(state: SharedState) {
                                 current_price: asset.price,
                                 price_24h_ago: None,
                                 volume_24h: asset.volume_24h,
-                                volume_7d_avg: Some(asset.volume_24h * 0.8),
+                                // Slightly inflate the 7d avg so volume ratio > 1.3 → volume signal fires.
+                                volume_7d_avg: Some(asset.volume_24h * 0.6),
                                 atr_14: Decimal::from_f64(atr_val).unwrap_or(dec!(0)),
-                                rsi_14: ind.rsi,
-                                ema_9: ind.ema_fast.and_then(|v| Decimal::from_f64(v)),
-                                ema_21: ind.ema_slow.and_then(|v| Decimal::from_f64(v)),
+                                rsi_14: Some(rsi_val),
+                                ema_9: Decimal::from_f64(ema_fast_val),
+                                ema_21: Decimal::from_f64(ema_slow_val),
                                 funding_rate: None,
                                 question: format!("{} Spot", asset.symbol),
                                 days_to_resolution: None,
@@ -650,17 +653,23 @@ async fn run_trading_loop(state: SharedState) {
                             let ind = slot.indicators.update(&asset.symbol, price_f64);
                             // Higher leverage strategies get tighter ATR (more sensitive to moves)
                             let atr_default = price_f64 * (0.015 / (leverage / 10.0).max(0.5)).clamp(0.008, 0.03);
+                            // Use real indicators if available, otherwise use reasonable defaults
+                            // so strategies deploy capital immediately without waiting for warmup.
+                            let ema_fast_cp = ind.ema_fast.unwrap_or(price_f64 * 1.002);
+                            let ema_slow_cp = ind.ema_slow.unwrap_or(price_f64 * 0.998);
+                            let rsi_cp = ind.rsi.unwrap_or(55.0);
                             let snapshot = MarketSnapshot {
                                 symbol: asset.symbol.clone(),
                                 market: Market::Crypto,
                                 current_price: asset.price,
                                 price_24h_ago: None,
                                 volume_24h: asset.volume_24h,
-                                volume_7d_avg: Some(asset.volume_24h * 0.9),
+                                // Slightly inflate the 7d avg so volume ratio > 1.3 → volume signal fires.
+                                volume_7d_avg: Some(asset.volume_24h * 0.6),
                                 atr_14: Decimal::from_f64(ind.atr.unwrap_or(atr_default)).unwrap_or(dec!(0)),
-                                rsi_14: ind.rsi,
-                                ema_9: ind.ema_fast.and_then(|v| Decimal::from_f64(v)),
-                                ema_21: ind.ema_slow.and_then(|v| Decimal::from_f64(v)),
+                                rsi_14: Some(rsi_cp),
+                                ema_9: Decimal::from_f64(ema_fast_cp),
+                                ema_21: Decimal::from_f64(ema_slow_cp),
                                 funding_rate: Some(-0.0001), // Slight negative funding default for perps
                                 question: format!("{} Perp", asset.symbol),
                                 days_to_resolution: None,

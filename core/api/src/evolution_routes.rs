@@ -3,32 +3,85 @@ use rust_decimal::prelude::*;
 use crate::state::SharedState;
 use tradoshka_engine;
 
+struct SlotSnapshot {
+    name: String,
+    market: String,
+    strategy_type: String,
+    status: String,
+    sharpe: f64,
+    pnl: f64,
+    equity: f64,
+    balance: f64,
+    unrealized_pnl: f64,
+    realized_pnl: f64,
+    win_rate: f64,
+    trades: usize,
+    age_hours: i64,
+    generation: u32,
+    parent: Option<String>,
+    open_positions: usize,
+    fees: f64,
+    params: std::collections::HashMap<String, f64>,
+}
+
 pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let state = state.read().await;
-    let mut strategies: Vec<serde_json::Value> = state.strategy_manager.alive_slots().iter()
-        .map(|s| serde_json::json!({
-            "id": s.name,
-            "name": s.name,
-            "market": s.market,
-            "strategy_type": s.params.strategy_type,
-            "status": format!("{:?}", s.status),
-            // Numeric fields — page calls .toFixed() on these; win_rate is 0–1 fraction
-            "sharpe": (s.sharpe_ratio() * 100.0).round() / 100.0,
-            "pnl": (s.pnl_pct() * 100.0).round() / 100.0,
-            "total_pnl": (s.pnl_pct() * 100.0).round() / 100.0,
-            "unrealized_pnl": s.wallet.unrealized_pnl().to_f64().unwrap_or(0.0),
-            "realized_pnl": s.wallet.realized_pnl().to_f64().unwrap_or(0.0),
-            "equity": s.wallet.equity().to_f64().unwrap_or(100.0),
-            "balance": s.wallet.balance().to_f64().unwrap_or(100.0),
-            "open_positions": s.wallet.open_position_count(),
-            "fees": s.wallet.total_fees().to_f64().unwrap_or(0.0),
-            "win_rate": s.win_rate(),
-            "trades": s.trade_count(),
-            "age_hours": s.age_hours(),
-            "generation": s.generation,
-            "parent": s.parent,
-            "params": s.params.params,
-        }))
+    // Collect only what we need into owned data under a short read lock, then release
+    // before any allocation-heavy serialization work.  This prevents the read lock from
+    // blocking the trading-loop write lock (and vice-versa) for more than a few µs.
+    let (rows, total_alive) = {
+        let s = state.read().await;
+        let rows: Vec<SlotSnapshot> = s.strategy_manager.alive_slots().iter().map(|sl| {
+            SlotSnapshot {
+                name: sl.name.clone(),
+                market: sl.market.clone(),
+                strategy_type: sl.params.strategy_type.clone(),
+                status: format!("{:?}", sl.status),
+                sharpe: sl.sharpe_ratio(),
+                pnl: sl.pnl_pct(),
+                equity: sl.wallet.equity().to_f64().unwrap_or(100.0),
+                balance: sl.wallet.balance().to_f64().unwrap_or(100.0),
+                unrealized_pnl: sl.wallet.unrealized_pnl().to_f64().unwrap_or(0.0),
+                realized_pnl: sl.wallet.realized_pnl().to_f64().unwrap_or(0.0),
+                win_rate: sl.win_rate(),
+                trades: sl.trade_count(),
+                age_hours: sl.age_hours(),
+                generation: sl.generation,
+                parent: sl.parent.clone(),
+                open_positions: sl.wallet.open_position_count(),
+                fees: sl.wallet.total_fees().to_f64().unwrap_or(0.0),
+                params: sl.params.params.clone(),
+            }
+        }).collect();
+        let total = s.strategy_manager.alive_count();
+        (rows, total)
+    };
+    // Lock is now released — serialization happens without holding it.
+    let mut strategies: Vec<serde_json::Value> = rows.into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.name,
+                "name": r.name,
+                "market": r.market,
+                "strategy_type": r.strategy_type,
+                "status": r.status,
+                // Numeric fields — page calls .toFixed() on these; win_rate is 0–1 fraction
+                "sharpe": (r.sharpe * 100.0).round() / 100.0,
+                "pnl": (r.pnl * 100.0).round() / 100.0,
+                "total_pnl": (r.pnl * 100.0).round() / 100.0,
+                "unrealized_pnl": r.unrealized_pnl,
+                "realized_pnl": r.realized_pnl,
+                "equity": r.equity,
+                "balance": r.balance,
+                "open_positions": r.open_positions,
+                "fees": r.fees,
+                "win_rate": r.win_rate,
+                "trades": r.trades,
+                "age_hours": r.age_hours,
+                "generation": r.generation,
+                "parent": r.parent,
+                "params": r.params,
+            })
+        })
         .collect();
     strategies.sort_by(|a, b| {
         let sa = a["sharpe"].as_f64().unwrap_or(0.0);
@@ -41,7 +94,7 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
     }
     Json(serde_json::json!({
         "strategies": strategies,
-        "total_alive": state.strategy_manager.alive_count(),
+        "total_alive": total_alive,
     }))
 }
 
@@ -100,31 +153,48 @@ pub async fn get_graveyard(State(state): State<SharedState>) -> Json<serde_json:
 }
 
 pub async fn get_evolution_stats(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let state = state.read().await;
-    let alive = state.strategy_manager.alive_slots();
-    let avg_sharpe = if alive.is_empty() { 0.0 } else {
-        alive.iter().map(|s| s.sharpe_ratio()).sum::<f64>() / alive.len() as f64
+    // Collect summary data under a short read lock, then release before building JSON.
+    let (alive_count, dead_count, total_count, evo_hour, avg_sharpe, total_capital, best_name, best_sharpe) = {
+        let s = state.read().await;
+        let alive = s.strategy_manager.alive_slots();
+        let avg_sharpe = if alive.is_empty() { 0.0 } else {
+            alive.iter().map(|sl| sl.sharpe_ratio()).sum::<f64>() / alive.len() as f64
+        };
+        let best = alive.iter().max_by(|a, b|
+            a.sharpe_ratio().partial_cmp(&b.sharpe_ratio()).unwrap_or(std::cmp::Ordering::Equal)
+        );
+        let total_capital: f64 = alive.iter()
+            .map(|sl| sl.wallet.equity().to_f64().unwrap_or(100.0))
+            .sum();
+        let best_name = best.map(|sl| sl.name.clone()).unwrap_or_else(|| "—".to_string());
+        let best_sharpe = best.map(|sl| sl.sharpe_ratio()).unwrap_or(0.0);
+        (
+            s.strategy_manager.alive_count(),
+            s.strategy_manager.dead_count(),
+            s.strategy_manager.total_count(),
+            s.evolution_engine.hour,
+            avg_sharpe,
+            total_capital,
+            best_name,
+            best_sharpe,
+        )
     };
-    let best = alive.iter().max_by(|a, b|
-        a.sharpe_ratio().partial_cmp(&b.sharpe_ratio()).unwrap_or(std::cmp::Ordering::Equal)
-    );
-    let total_capital: f64 = alive.iter().map(|s| s.wallet.equity().to_string().parse::<f64>().unwrap_or(100.0)).sum();
 
     Json(serde_json::json!({
         // Canonical field names expected by the dashboard
-        "alive_count": state.strategy_manager.alive_count(),
-        "dead_count": state.strategy_manager.dead_count(),
-        "total_count": state.strategy_manager.total_count(),
-        "hours_running": state.evolution_engine.hour as f64,
+        "alive_count": alive_count,
+        "dead_count": dead_count,
+        "total_count": total_count,
+        "hours_running": evo_hour as f64,
         "avg_sharpe": (avg_sharpe * 100.0).round() / 100.0,
         "total_capital": total_capital,
-        "best_strategy": best.map(|s| s.name.clone()).unwrap_or_else(|| "—".to_string()),
+        "best_strategy": best_name,
         // Legacy aliases kept for backwards-compat
-        "alive": state.strategy_manager.alive_count(),
-        "dead": state.strategy_manager.dead_count(),
-        "current_hour": state.evolution_engine.hour,
+        "alive": alive_count,
+        "dead": dead_count,
+        "current_hour": evo_hour,
         "total_capital_deployed": format!("{:.0}", total_capital),
-        "best_sharpe": best.map(|s| (s.sharpe_ratio() * 100.0).round() / 100.0).unwrap_or(0.0),
+        "best_sharpe": (best_sharpe * 100.0).round() / 100.0,
     }))
 }
 

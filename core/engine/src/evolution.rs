@@ -159,11 +159,22 @@ impl EvolutionEngine {
 
         if top.is_empty() { return (killed, spawned); }
 
+        let mut has_random = false;
         for i in 0..spawn_count {
             if !manager.can_spawn() { break; }
 
-            // 0,1 = mutation (40%), 2,3 = crossover (40%), 4 = random (20%)
-            let spawn_type = i % 5;
+            // Allocation: 0 = mutation, 1 = crossover, 2+ = random explorer.
+            // Use modulo-3 so every group of 3 spawns gets one of each type (was modulo-5
+            // which meant the random-explorer slot was unreachable with spawn_count ≤ 4).
+            // Additionally, force the last spawn to be a random explorer when none have
+            // been scheduled yet — guarantees at least one explorer per evolution cycle
+            // regardless of how small the kill batch is.
+            let spawn_type = if !has_random && i == spawn_count - 1 {
+                4 // Force last slot to be a random explorer
+            } else {
+                (i % 3) * 2 // 0→mutation, 2→crossover, 4→explorer
+            };
+            if spawn_type >= 4 { has_random = true; }
             let seed = (self.hour * 31 + i as u64 * 17 + killed.len() as u64 * 7) % 10000;
 
             let (new_name, new_params, market, gen, details) = if spawn_type < 2 && !top.is_empty() {
