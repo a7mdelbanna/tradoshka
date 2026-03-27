@@ -17,7 +17,19 @@
 - [ ] PyO3 bridge (Phase 1)
 - [ ] CI/CD pipeline
 
-## Phase 1: Polymarket — Not started
+## Phase 0.5: Claude CLI Integration — COMPLETE
+- [x] Replace OpenAI HTTP client with Claude Code CLI (`claude -p`)
+- [x] Single batch prompt (20 agents in 1 call vs. 20 sequential calls)
+- [x] JSON schema enforcement via `--json-schema`
+- [x] Statistical fallback when CLI unavailable
+- [x] Seeded RNG for deterministic fallback
+- [x] 9 unit tests (ClaudeClient + Simulation)
+- [x] Live smoke test verified with Max subscription
+- [ ] Enhance AgentFactory with Claude-powered personas
+- [ ] Claude integration for crypto strategies
+- [ ] Opus vs. Sonnet prediction quality comparison
+
+## Phase 1: Polymarket — In Progress
 ## Phase 2: Crypto — Not started
 ## Phase 3: Forex — Not started
 ## Phase 4: Stocks — Not started
