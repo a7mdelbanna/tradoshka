@@ -94,6 +94,36 @@ impl StrategyParams {
                 params.insert("price_max".into(), 0.80);
                 params.insert("confidence_threshold".into(), 0.55);
             }
+            "mc_snipe" => {
+                params.insert("auto_leverage".into(), 1.0);
+                params.insert("auto_timeframe".into(), 1.0); // 1 minute
+                params.insert("auto_position_count".into(), 3.0);
+                params.insert("capital_usage_pct".into(), 90.0);
+                params.insert("stop_loss_atr_mult".into(), 1.0); // Tight for memes
+                params.insert("take_profit_rr".into(), 2.0);
+                params.insert("time_limit".into(), 15.0); // minutes
+                params.insert("target_mult".into(), 2.0);
+                params.insert("min_safety".into(), 30.0);
+            }
+            "mc_trend" => {
+                params.insert("auto_leverage".into(), 1.0);
+                params.insert("auto_timeframe".into(), 5.0);
+                params.insert("auto_position_count".into(), 5.0);
+                params.insert("capital_usage_pct".into(), 80.0);
+                params.insert("stop_loss_atr_mult".into(), 1.5);
+                params.insert("take_profit_rr".into(), 2.0);
+                params.insert("target_mult".into(), 2.0);
+                params.insert("min_safety".into(), 50.0);
+            }
+            "mc_whale" => {
+                params.insert("auto_leverage".into(), 1.0);
+                params.insert("auto_timeframe".into(), 5.0);
+                params.insert("auto_position_count".into(), 4.0);
+                params.insert("capital_usage_pct".into(), 75.0);
+                params.insert("stop_loss_atr_mult".into(), 1.5);
+                params.insert("take_profit_rr".into(), 2.0);
+                params.insert("min_safety".into(), 40.0);
+            }
             _ => {
                 params.insert("auto_leverage".into(), 5.0);
                 params.insert("auto_timeframe".into(), 15.0);
@@ -134,6 +164,9 @@ impl StrategyParams {
             "value" => vec!["min_edge".into()],
             "pm_copy" => vec!["min_trade_size".into(), "min_win_rate".into(), "price_min".into(), "price_max".into(), "min_volume".into()],
             "pm_niche" => vec!["price_min".into(), "price_max".into(), "confidence_threshold".into()],
+            "mc_snipe" => vec!["time_limit".into(), "target_mult".into(), "min_safety".into(), "min_buyers".into(), "max_age_mins".into(), "max_mcap".into()],
+            "mc_trend" => vec!["ema_fast".into(), "ema_slow".into(), "volume_mult".into(), "target_mult".into(), "min_safety".into(), "dip_pct".into(), "breakout_pct".into()],
+            "mc_whale" => vec!["min_whale_wr".into(), "min_consensus".into(), "min_safety".into(), "max_delay_secs".into()],
             _ => self.params.keys().cloned().collect(),
         };
         // Add execution params for ALL strategy types
@@ -400,6 +433,52 @@ pub fn initial_strategies() -> Vec<(String, StrategyParams)> {
         ("CP-hybrid-grid-momentum".into(), StrategyParams::new("grid").with_param("spacing_pct", 0.5).with_param("grid_count", 8.0).with_param("ema_fast", 5.0)),
         ("CP-experimental-1".into(), StrategyParams::new("scalp").with_param("ema_fast", 6.0).with_param("ema_slow", 14.0).with_param("leverage", 8.0)),
         ("CP-experimental-2".into(), StrategyParams::new("scalp").with_param("ema_fast", 10.0).with_param("ema_slow", 22.0).with_param("leverage", 4.0)),
+
+        // ═══ Meme Coins — Early Detection (15) ═══
+        ("MC-ED-pump-instant".into(),   StrategyParams::new("mc_snipe").with_param("time_limit", 1.0).with_param("target_mult", 2.0).with_param("min_safety", 20.0).with_param("capital_usage_pct", 90.0).with_param("auto_position_count", 3.0)),
+        ("MC-ED-pump-confirmed".into(), StrategyParams::new("mc_snipe").with_param("time_limit", 5.0).with_param("target_mult", 3.0).with_param("min_safety", 30.0).with_param("min_buyers", 5.0)),
+        ("MC-ED-pool-fresh".into(),     StrategyParams::new("mc_snipe").with_param("max_age_mins", 5.0).with_param("target_mult", 2.0).with_param("min_safety", 25.0)),
+        ("MC-ED-pool-volume".into(),    StrategyParams::new("mc_snipe").with_param("min_volume", 10000.0).with_param("target_mult", 2.0).with_param("min_safety", 30.0)),
+        ("MC-ED-mcap-micro".into(),     StrategyParams::new("mc_snipe").with_param("max_mcap", 10000.0).with_param("target_mult", 5.0).with_param("min_safety", 20.0)),
+        ("MC-ED-mcap-small".into(),     StrategyParams::new("mc_snipe").with_param("max_mcap", 50000.0).with_param("target_mult", 3.0).with_param("min_safety", 30.0)),
+        ("MC-ED-liquidity-lock".into(), StrategyParams::new("mc_snipe").with_param("min_safety", 80.0).with_param("target_mult", 3.0)),
+        ("MC-ED-dev-clean".into(),      StrategyParams::new("mc_snipe").with_param("max_dev_pct", 5.0).with_param("target_mult", 2.0).with_param("min_safety", 70.0)),
+        ("MC-ED-social-mention".into(), StrategyParams::new("mc_snipe").with_param("target_mult", 2.0).with_param("min_safety", 40.0)),
+        ("MC-ED-multi-buy".into(),      StrategyParams::new("mc_snipe").with_param("min_buyers", 10.0).with_param("target_mult", 2.0).with_param("min_safety", 30.0)),
+        ("MC-ED-fast-flip".into(),      StrategyParams::new("mc_snipe").with_param("time_limit", 5.0).with_param("target_mult", 1.2).with_param("min_safety", 20.0)),
+        ("MC-ED-slow-flip".into(),      StrategyParams::new("mc_snipe").with_param("time_limit", 30.0).with_param("target_mult", 3.0).with_param("min_safety", 40.0)),
+        ("MC-ED-conservative".into(),   StrategyParams::new("mc_snipe").with_param("min_safety", 80.0).with_param("target_mult", 2.0)),
+        ("MC-ED-aggressive".into(),     StrategyParams::new("mc_snipe").with_param("min_safety", 20.0).with_param("target_mult", 5.0)),
+        ("MC-ED-explorer".into(),       StrategyParams::new("mc_snipe").with_param("min_safety", 30.0).with_param("target_mult", 2.5)),
+
+        // ═══ Meme Coins — Trend Riding (15) ═══
+        ("MC-TR-volume-surge".into(),     StrategyParams::new("mc_trend").with_param("volume_mult", 5.0).with_param("target_mult", 2.0).with_param("min_safety", 50.0)),
+        ("MC-TR-volume-mega".into(),      StrategyParams::new("mc_trend").with_param("min_volume", 1000000.0).with_param("target_mult", 2.0).with_param("min_safety", 50.0)),
+        ("MC-TR-price-breakout".into(),   StrategyParams::new("mc_trend").with_param("breakout_pct", 20.0).with_param("target_mult", 2.0).with_param("min_safety", 40.0)),
+        ("MC-TR-momentum-fast".into(),    StrategyParams::new("mc_trend").with_param("ema_fast", 3.0).with_param("ema_slow", 8.0).with_param("min_safety", 40.0)),
+        ("MC-TR-momentum-slow".into(),    StrategyParams::new("mc_trend").with_param("ema_fast", 9.0).with_param("ema_slow", 21.0).with_param("min_safety", 50.0)),
+        ("MC-TR-rsi-bounce".into(),       StrategyParams::new("mc_trend").with_param("rsi_oversold", 30.0).with_param("rsi_entry", 40.0).with_param("min_safety", 50.0)),
+        ("MC-TR-dip-buy".into(),          StrategyParams::new("mc_trend").with_param("dip_pct", 30.0).with_param("min_volume", 50000.0).with_param("min_safety", 50.0)),
+        ("MC-TR-social-trending".into(),  StrategyParams::new("mc_trend").with_param("target_mult", 2.0).with_param("min_safety", 40.0)),
+        ("MC-TR-dexscreener-hot".into(),  StrategyParams::new("mc_trend").with_param("target_mult", 2.0).with_param("min_safety", 40.0)),
+        ("MC-TR-multi-timeframe".into(),  StrategyParams::new("mc_trend").with_param("target_mult", 3.0).with_param("min_safety", 60.0)),
+        ("MC-TR-mean-revert".into(),      StrategyParams::new("mc_trend").with_param("rsi_oversold", 20.0).with_param("target_mult", 2.0).with_param("min_safety", 50.0)),
+        ("MC-TR-grid-volatile".into(),    StrategyParams::new("mc_trend").with_param("spacing_pct", 5.0).with_param("grid_count", 5.0).with_param("min_safety", 50.0)),
+        ("MC-TR-conservative".into(),     StrategyParams::new("mc_trend").with_param("min_mcap", 100000.0).with_param("min_safety", 70.0).with_param("target_mult", 2.0)),
+        ("MC-TR-aggressive".into(),       StrategyParams::new("mc_trend").with_param("min_safety", 30.0).with_param("target_mult", 3.0)),
+        ("MC-TR-explorer".into(),         StrategyParams::new("mc_trend").with_param("min_safety", 40.0).with_param("target_mult", 2.5)),
+
+        // ═══ Meme Coins — Whale Copy (10) ═══
+        ("MC-WC-top-pnl".into(),    StrategyParams::new("mc_whale").with_param("min_whale_wr", 50.0).with_param("top_n", 10.0).with_param("min_safety", 40.0)),
+        ("MC-WC-high-wr".into(),    StrategyParams::new("mc_whale").with_param("min_whale_wr", 60.0).with_param("min_safety", 50.0)),
+        ("MC-WC-early-buyer".into(), StrategyParams::new("mc_whale").with_param("max_entry_age", 5.0).with_param("min_safety", 30.0)),
+        ("MC-WC-whale-large".into(), StrategyParams::new("mc_whale").with_param("min_portfolio", 50000.0).with_param("min_safety", 50.0)),
+        ("MC-WC-whale-small".into(), StrategyParams::new("mc_whale").with_param("min_portfolio", 5000.0).with_param("max_portfolio", 20000.0).with_param("min_safety", 40.0)),
+        ("MC-WC-consensus".into(),  StrategyParams::new("mc_whale").with_param("min_consensus", 3.0).with_param("min_safety", 50.0)),
+        ("MC-WC-contrarian".into(), StrategyParams::new("mc_whale").with_param("min_safety", 30.0)),
+        ("MC-WC-fast-follow".into(), StrategyParams::new("mc_whale").with_param("max_delay_secs", 30.0).with_param("min_safety", 30.0)),
+        ("MC-WC-delayed".into(),    StrategyParams::new("mc_whale").with_param("min_delay_secs", 120.0).with_param("min_safety", 50.0)),
+        ("MC-WC-explorer".into(),   StrategyParams::new("mc_whale").with_param("min_safety", 35.0)),
     ]
 }
 
@@ -409,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_initial_strategies_count() {
-        assert_eq!(initial_strategies().len(), 120);
+        assert_eq!(initial_strategies().len(), 160);
     }
 
     #[test]
