@@ -20,6 +20,8 @@ pub mod indicator_state;
 pub mod data_logger;
 pub mod wallet_scorer;
 pub mod basket_consensus;
+pub mod copy_engine;
+pub mod copy_circuit_breaker;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -43,3 +45,5 @@ pub use indicator_state::{StrategyIndicatorEngine, AssetIndicators};
 pub use data_logger::DataLogger;
 pub use wallet_scorer::{WalletScorer, ScoredWallet, WalletGrade, TraderType};
 pub use basket_consensus::{BasketConsensus, Basket, ConsensusResult, AdaptiveSizer, WalletPosition as CopyWalletPosition};
+pub use copy_engine::{CopyEngine, CopyDecision, AIVerdict};
+pub use copy_circuit_breaker::{CopyCircuitBreaker, BreakerCheck, BreakerStatus};
