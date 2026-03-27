@@ -45,19 +45,112 @@ impl MemeCoinClient {
         Ok(data.pairs.unwrap_or_default())
     }
 
-    /// Get trending/top Solana meme tokens from DexScreener.
-    /// Uses search with common meme terms to find active tokens.
+    /// Get currently boosted/trending Solana token addresses from DexScreener.
+    async fn get_boosted_addresses(&self) -> Result<Vec<String>> {
+        let url = format!("{}{}", DEXSCREENER_BASE, DEXSCREENER_TOKEN_BOOSTS);
+        let resp = self.http.get(&url).send().await
+            .map_err(|e| TradoshkaError::ConnectionError(e.to_string()))?;
+        let data: Vec<DexScreenerBoost> = resp.json().await
+            .map_err(|e| TradoshkaError::AdapterError(e.to_string()))?;
+        Ok(data.into_iter()
+            .filter(|b| b.chain_id == "solana")
+            .map(|b| b.token_address)
+            .collect())
+    }
+
+    /// Get recently listed Solana token addresses from DexScreener.
+    async fn get_latest_profile_addresses(&self) -> Result<Vec<String>> {
+        let url = format!("{}{}", DEXSCREENER_BASE, DEXSCREENER_TOKEN_PROFILES);
+        let resp = self.http.get(&url).send().await
+            .map_err(|e| TradoshkaError::ConnectionError(e.to_string()))?;
+        let data: Vec<DexScreenerProfile> = resp.json().await
+            .map_err(|e| TradoshkaError::AdapterError(e.to_string()))?;
+        Ok(data.into_iter()
+            .filter(|p| p.chain_id == "solana")
+            .map(|p| p.token_address)
+            .collect())
+    }
+
+    /// Batch-fetch pair data for multiple token addresses.
+    /// DexScreener supports comma-separated addresses (up to ~30).
+    async fn get_tokens_batch(&self, addresses: &[String]) -> Result<Vec<DexScreenerPair>> {
+        if addresses.is_empty() { return Ok(Vec::new()); }
+        let batch = addresses.join(",");
+        let url = format!("{}{}{}", DEXSCREENER_BASE, DEXSCREENER_SOLANA_TOKENS, batch);
+        let resp = self.http.get(&url).send().await
+            .map_err(|e| TradoshkaError::ConnectionError(e.to_string()))?;
+        let data: DexScreenerResponse = resp.json().await
+            .map_err(|e| TradoshkaError::AdapterError(e.to_string()))?;
+        Ok(data.pairs.unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.chain_id.as_deref() == Some("solana"))
+            .collect())
+    }
+
+    /// Get trending Solana meme tokens using multiple discovery channels:
+    /// 1. Token boosts (currently promoted/trending)
+    /// 2. Token profiles (recently listed)
+    /// 3. Keyword search (popular meme terms) as fallback
     pub async fn get_trending_solana(&self) -> Result<Vec<MemeToken>> {
         let mut all_tokens = Vec::new();
+        let mut seen = std::collections::HashSet::new();
 
-        // Search for popular meme keywords on Solana
-        for keyword in &["pepe", "doge", "cat", "moon", "pump", "sol", "bonk", "wif"] {
+        // Channel 1: Boosted tokens (highest signal — these are actively trending)
+        match self.get_boosted_addresses().await {
+            Ok(addrs) if !addrs.is_empty() => {
+                // Batch fetch up to 30 at a time
+                for chunk in addrs.chunks(30) {
+                    match self.get_tokens_batch(&chunk.to_vec()).await {
+                        Ok(pairs) => {
+                            for pair in pairs {
+                                if let Some(token) = pair.to_meme_token() {
+                                    if seen.insert(token.address.clone()) {
+                                        all_tokens.push(token);
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                tracing::info!("MC boost scan: {} tokens from boosts", all_tokens.len());
+            }
+            _ => { tracing::debug!("MC boost scan: no boosted tokens"); }
+        }
+
+        // Channel 2: Latest profiles (recently created/updated tokens)
+        match self.get_latest_profile_addresses().await {
+            Ok(addrs) if !addrs.is_empty() => {
+                let before = all_tokens.len();
+                for chunk in addrs.chunks(30) {
+                    match self.get_tokens_batch(&chunk.to_vec()).await {
+                        Ok(pairs) => {
+                            for pair in pairs {
+                                if let Some(token) = pair.to_meme_token() {
+                                    if seen.insert(token.address.clone()) {
+                                        all_tokens.push(token);
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                tracing::info!("MC profile scan: {} new tokens from profiles", all_tokens.len() - before);
+            }
+            _ => { tracing::debug!("MC profile scan: no profile tokens"); }
+        }
+
+        // Channel 3: Keyword search fallback (catches established popular meme coins)
+        for keyword in &["pump", "bonk", "wif", "pepe", "doge"] {
             match self.search_tokens(keyword).await {
                 Ok(pairs) => {
                     for pair in pairs {
                         if let Some(token) = pair.to_meme_token() {
                             if token.liquidity_usd >= 1000.0 && token.volume_24h >= 500.0 {
-                                all_tokens.push(token);
+                                if seen.insert(token.address.clone()) {
+                                    all_tokens.push(token);
+                                }
                             }
                         }
                     }
@@ -66,12 +159,10 @@ impl MemeCoinClient {
             }
         }
 
-        // Deduplicate by address
-        all_tokens.sort_by(|a, b| b.volume_24h.partial_cmp(&a.volume_24h).unwrap_or(std::cmp::Ordering::Equal));
-        let mut seen = std::collections::HashSet::new();
-        all_tokens.retain(|t| seen.insert(t.address.clone()));
+        // Sort by 5-minute volume (most active first — highest signal for meme coins)
+        all_tokens.sort_by(|a, b| b.volume_5m.partial_cmp(&a.volume_5m).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Take top 50 by volume
+        // Take top 50
         all_tokens.truncate(50);
 
         Ok(all_tokens)
@@ -94,7 +185,6 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let _client = MemeCoinClient::new();
-        // Just verify it creates without panic
         assert!(true);
     }
 }

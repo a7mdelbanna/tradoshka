@@ -1065,7 +1065,8 @@ async fn run_trading_loop(state: SharedState) {
 
                         // V2 strategy-specific params
                         let min_volume_5m = if strategy_type == "mc_trend_v2" {
-                            slot.params.get("min_volume_5m").max(5000.0)
+                            let v = slot.params.get("min_volume_5m");
+                            if v > 0.0 { v } else { 1000.0 } // Use strategy's threshold, default $1K
                         } else { 500.0 };
                         let max_mcap_v2 = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
                             let v = slot.params.get("max_mcap");
@@ -1089,16 +1090,19 @@ async fn run_trading_loop(state: SharedState) {
                                 "mc_snipe" => token.is_new() || token.volume_surge(),
                                 "mc_trend" => token.price_change_1h > 10.0 || token.volume_surge(),
                                 "mc_whale" => *whale_consensus >= 2 || token.volume_24h > 50000.0,
-                                // V2: real entry criteria
+                                // V2 Trend: volume threshold + upward momentum
                                 "mc_trend_v2" => {
-                                    token.volume_5m >= min_volume_5m           // V2: real volume threshold
-                                    && token.price_change_5m > 0.0             // price still going up
-                                    && token.price_change_5m >= min_buy_sell_ratio // buy pressure proxy
+                                    token.volume_5m >= min_volume_5m
+                                    && token.price_change_5m > -5.0  // not dumping (allow flat/small dips)
+                                    && (token.price_change_5m > 0.0 || token.price_change_1h > 0.0) // some upward pressure
                                     && (max_mcap_v2 <= 0.0 || token.market_cap <= max_mcap_v2)
                                 },
+                                // V2 Copy: volume-based (no whale requirement in dry mode since
+                                // we don't have real wallet tracking — use volume + safety as proxy)
                                 "mc_copy_v2" => {
-                                    *whale_consensus >= 1
-                                    && token.volume_5m >= 5000.0
+                                    token.volume_5m >= 3000.0
+                                    && token.volume_24h >= 50000.0
+                                    && token.price_change_1h > -10.0  // not in freefall
                                     && (max_mcap_v2 <= 0.0 || token.market_cap <= max_mcap_v2)
                                 },
                                 _ => token.volume_24h > 10000.0,
@@ -1106,16 +1110,8 @@ async fn run_trading_loop(state: SharedState) {
 
                             if !should_trade { continue; }
 
-                            // V2: minimum $5K volume threshold for new strategy types
-                            let vol_floor = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
-                                5000.0
-                            } else {
-                                500.0
-                            };
-                            if token.volume_5m < vol_floor { continue; }
-
                             // Min liquidity: only buy into deep enough markets
-                            if token.liquidity_usd < 10000.0 { continue; } // >$10K liquidity
+                            if token.liquidity_usd < 5000.0 { continue; } // >$5K liquidity
 
                             // Price change filter: skip tokens already dumping hard
                             if token.price_change_5m < -10.0 { continue; } // Skip tokens down >10% in 5 min

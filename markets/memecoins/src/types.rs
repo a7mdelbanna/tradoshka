@@ -72,6 +72,26 @@ pub struct DexScreenerResponse {
     pub pairs: Option<Vec<DexScreenerPair>>,
 }
 
+/// DexScreener token-boosts response — currently trending/promoted tokens.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DexScreenerBoost {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    #[serde(rename = "tokenAddress")]
+    pub token_address: String,
+    pub url: Option<String>,
+}
+
+/// DexScreener token-profiles response — recently updated token profiles.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DexScreenerProfile {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    #[serde(rename = "tokenAddress")]
+    pub token_address: String,
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DexScreenerPair {
     #[serde(rename = "chainId")]

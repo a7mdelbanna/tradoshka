@@ -5,6 +5,8 @@ pub const DEXSCREENER_BASE: &str = "https://api.dexscreener.com";
 pub const DEXSCREENER_SOLANA_TOKENS: &str = "/latest/dex/tokens/";
 pub const DEXSCREENER_SOLANA_PAIRS: &str = "/latest/dex/pairs/solana/";
 pub const DEXSCREENER_SEARCH: &str = "/latest/dex/search";
+pub const DEXSCREENER_TOKEN_BOOSTS: &str = "/token-boosts/top/v1";
+pub const DEXSCREENER_TOKEN_PROFILES: &str = "/token-profiles/latest/v1";
 
 // Jupiter — prices and token list
 pub const JUPITER_PRICE: &str = "https://price.jup.ag/v4/price";
@@ -22,7 +24,7 @@ pub const SCAN_TRENDING_SECS: u64 = 300;
 pub const SCAN_WHALES_SECS: u64 = 300;
 
 // Safety thresholds
-pub const MIN_LIQUIDITY_USD: f64 = 10000.0;  // was 5000 — higher floor filters thin markets
+pub const MIN_LIQUIDITY_USD: f64 = 5000.0;  // $5K minimum — tight but realistic for Solana meme coins
 pub const MAX_DEV_WALLET_PCT: f64 = 10.0;
 pub const MAX_WHALE_CONCENTRATION_PCT: f64 = 15.0;
 pub const MAX_TAX_PCT: f64 = 10.0;
