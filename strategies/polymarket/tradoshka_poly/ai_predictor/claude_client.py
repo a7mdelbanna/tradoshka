@@ -51,12 +51,11 @@ class ClaudeClient:
     def predict(self, system_prompt: str, user_message: str) -> dict:
         cmd = [
             "claude", "-p", user_message,
-            "--append-system-prompt", system_prompt,
+            "--system-prompt", system_prompt,
             "--model", self.config.model,
             "--output-format", "json",
             "--json-schema", self.VOTE_SCHEMA,
-            "--bare",
-            "--max-turns", "1",
+            "--max-turns", "2",
         ]
         try:
             proc = subprocess.run(
@@ -72,8 +71,11 @@ class ClaudeClient:
             raise RuntimeError(f"Claude CLI error (code {proc.returncode}): {proc.stderr}")
 
         response = json.loads(proc.stdout)
-        # claude --output-format json wraps the response in {"result": "...", "session_id": "..."}
-        result_text = response.get("result", proc.stdout)
-        if isinstance(result_text, str):
+        # --json-schema puts structured output in "structured_output", not "result"
+        if "structured_output" in response:
+            return response["structured_output"]
+        # Fallback: try parsing from "result" field
+        result_text = response.get("result", "")
+        if isinstance(result_text, str) and result_text.strip():
             return json.loads(result_text)
-        return result_text
+        raise RuntimeError(f"Claude CLI returned no structured output: {proc.stdout[:200]}")

@@ -38,7 +38,11 @@ def test_predict_returns_parsed_json():
     client = ClaudeClient(config)
 
     mock_response = json.dumps({
-        "result": '{"votes": [{"agent_id": "agent_0000", "probability_yes": 0.72, "confidence": 0.85, "reasoning": "test"}]}',
+        "type": "result",
+        "result": "",
+        "structured_output": {
+            "votes": [{"agent_id": "agent_0000", "probability_yes": 0.72, "confidence": 0.85, "reasoning": "test"}]
+        },
         "session_id": "test-session",
     })
 
@@ -63,7 +67,7 @@ def test_predict_returns_parsed_json():
         assert "-p" in cmd
         assert "--model" in cmd
         assert "--output-format" in cmd
-        assert "--bare" in cmd
+        assert "--system-prompt" in cmd
         assert "--max-turns" in cmd
 
 
