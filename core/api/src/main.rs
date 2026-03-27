@@ -309,8 +309,8 @@ async fn run_trading_loop(state: SharedState) {
                         let config = ResearchConfig {
                             equity: slot.wallet.equity(),
                             risk_pct: 1.0,
-                            min_confidence: 0.60,
-                            min_signals: 2,
+                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 }, // Easier for first trades
+                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },         // 1 signal enough to start
                             min_rr_ratio: 2.0,
                             strategy_tier: "Unproven".into(),
                             time_stop_hours: 24,
@@ -727,8 +727,10 @@ async fn run_trading_loop(state: SharedState) {
                                 let no_in_range  = market.no_price  >= price_min && market.no_price  <= price_max;
                                 if !yes_in_range && !no_in_range { continue; }
 
-                                // NICHE GATE — pm_niche strategies only trade their niche
-                                if strategy_type == "pm_niche" {
+                                // NICHE GATE — pm_niche strategies only trade their niche.
+                                // Exception: strategies with 0 trades auto-widen to match any market
+                                // so they can make their first trade; niche enforcement resumes after.
+                                if strategy_type == "pm_niche" && slot.trade_count() > 0 {
                                     let q = market.question.to_lowercase();
                                     let matches_niche = match niche_id {
                                         1 => q.contains("president") || q.contains("election") || q.contains("congress") || q.contains("democrat") || q.contains("republican") || q.contains("trump") || q.contains("biden") || q.contains("political") || q.contains("senate") || q.contains("governor"),
@@ -899,8 +901,8 @@ async fn run_trading_loop(state: SharedState) {
                         let config = ResearchConfig {
                             equity: slot.wallet.equity(),
                             risk_pct: 1.0,
-                            min_confidence: 0.60,
-                            min_signals: 2,
+                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 }, // Easier for first trades
+                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },         // 1 signal enough to start
                             min_rr_ratio: 2.0,
                             strategy_tier: "Unproven".into(),
                             time_stop_hours: 12, // Shorter hold for perps-style strategies
