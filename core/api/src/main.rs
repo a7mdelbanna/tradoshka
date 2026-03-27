@@ -71,6 +71,7 @@ async fn run_trading_loop(state: SharedState) {
     let mut scan_ticker = interval(scan_interval);
     let mut cycle_ticker = interval(cycle_interval);
     let mut evolution_ticker = interval(Duration::from_secs(60 * 60)); // 1 hour
+    let mut health_ticker = interval(Duration::from_secs(60 * 60)); // Every hour
     scan_ticker.tick().await;
 
     loop {
@@ -86,6 +87,29 @@ async fn run_trading_loop(state: SharedState) {
                     report.hour, report.killed.len(), report.spawned.len(),
                     report.alive_count, report.dead_count
                 );
+            }
+            _ = health_ticker.tick() => {
+                let s = state.read().await;
+                let alive = s.strategy_manager.alive_count();
+                let dead = s.strategy_manager.dead_count();
+
+                // Count per market
+                let pm_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-")).count();
+                let cs_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-")).count();
+                let cp_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-")).count();
+
+                let pm_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-") && s.trade_count() > 0).count();
+                let cs_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-") && s.trade_count() > 0).count();
+                let cp_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-") && s.trade_count() > 0).count();
+
+                tracing::info!("HEALTH CHECK: alive={}, dead={} | PM: {}/{} trading | CS: {}/{} trading | CP: {}/{} trading | Evolution hour: {}",
+                    alive, dead, pm_trading, pm_alive, cs_trading, cs_alive, cp_trading, cp_alive,
+                    s.evolution_engine.hour);
+
+                // Alert if any market has 0 trading strategies
+                if pm_alive == 0 { tracing::warn!("ALERT: No PM strategies alive!"); }
+                if cs_alive == 0 { tracing::warn!("ALERT: No CS strategies alive!"); }
+                if cp_alive == 0 { tracing::warn!("ALERT: No CP strategies alive!"); }
             }
             _ = scan_ticker.tick() => {
                 let mut s = state.write().await;
