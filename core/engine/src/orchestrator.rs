@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn test_run_cycle_no_markets() {
         let mut orch = Orchestrator::new(OrchestratorConfig::default());
-        let mut wallet = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut wallet = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.002));
         let mut recorder = TradeRecorder::new();
         let result = orch.run_cycle(&[], &mut wallet, &mut recorder);
         assert_eq!(result.markets_evaluated, 0);
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn test_run_cycle_with_mispriced_market() {
         let mut orch = Orchestrator::new(OrchestratorConfig::default());
-        let mut wallet = SimulatedWallet::new(dec!(1000), dec!(0));
+        let mut wallet = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.002));
         let mut recorder = TradeRecorder::new();
         // Total = 0.55 + 0.50 = 1.05 → deviation = 0.05 > 0.03 (mispricing signal)
         // volume > 5000 (volume signal) → 2 signals → research may approve
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_positions() {
         let mut orch = Orchestrator::new(OrchestratorConfig::default());
-        let mut wallet = SimulatedWallet::new(dec!(1000), dec!(0));
+        let mut wallet = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.002));
         let mut recorder = TradeRecorder::new();
         // mispricing + high volume = likely to produce a research-approved trade
         let markets = vec![make_market("Mispriced?", 0.40, 0.70, 100000.0)];
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn test_settle_market() {
         let mut orch = Orchestrator::new(OrchestratorConfig::default());
-        let mut wallet = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut wallet = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.002));
         let mut recorder = TradeRecorder::new();
 
         // Manually buy a position

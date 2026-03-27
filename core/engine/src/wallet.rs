@@ -47,16 +47,18 @@ pub struct SimulatedWallet {
     peak_equity: Decimal,
     total_fees: Decimal,
     realized_pnl: Decimal,
+    fee_rate: Decimal,
 }
 
 impl Default for SimulatedWallet {
     fn default() -> Self {
-        Self::new(Decimal::ZERO, Decimal::new(5, 0))
+        use rust_decimal_macros::dec;
+        Self::new(Decimal::ZERO, dec!(5), dec!(0.001))
     }
 }
 
 impl SimulatedWallet {
-    pub fn new(initial_balance: Decimal, slippage_bps: Decimal) -> Self {
+    pub fn new(initial_balance: Decimal, slippage_bps: Decimal, fee_rate: Decimal) -> Self {
         Self {
             balance: initial_balance,
             positions: HashMap::new(),
@@ -65,6 +67,7 @@ impl SimulatedWallet {
             peak_equity: initial_balance,
             total_fees: Decimal::ZERO,
             realized_pnl: Decimal::ZERO,
+            fee_rate,
         }
     }
 
@@ -113,15 +116,14 @@ impl SimulatedWallet {
         self.positions.len()
     }
 
-    /// Calculate Polymarket-realistic fee.
-    /// fee = base_rate * min(price, 1 - price) * shares
-    /// Base rate is approximately 2% (0.02)
-    pub fn calculate_fee(price: Decimal, shares: Decimal) -> Decimal {
-        let base_rate = Decimal::new(2, 2); // 0.02
-        let one = Decimal::ONE;
-        let complement = one - price;
-        let min_price = price.min(complement);
-        base_rate * min_price * shares
+    /// Calculate market-aware fee.
+    /// fee = fee_rate * price * shares
+    /// fee_rate is set per market:
+    ///   - Crypto spot/perps: 0.001 (0.1% Binance taker fee)
+    ///   - Polymarket:        0.002 (0.2% simplified)
+    ///   - Meme coins:        0.003 (0.3% = Raydium fee + gas proxy)
+    pub fn calculate_fee(&self, price: Decimal, shares: Decimal) -> Decimal {
+        (self.fee_rate * price * shares).abs()
     }
 
     /// Apply slippage to a price.
@@ -146,7 +148,7 @@ impl SimulatedWallet {
     ) -> Option<(Decimal, Decimal, Decimal)> {
         let fill_price = self.apply_slippage(market_price, OrderSide::Buy);
         let cost = fill_price * shares;
-        let fee = Self::calculate_fee(fill_price, shares);
+        let fee = self.calculate_fee(fill_price, shares);
         let total_cost = cost + fee;
 
         if total_cost > self.balance {
@@ -197,7 +199,7 @@ impl SimulatedWallet {
         let sell_shares = shares.min(pos.shares);
         let fill_price = self.apply_slippage(market_price, OrderSide::Sell);
         let revenue = fill_price * sell_shares;
-        let fee = Self::calculate_fee(fill_price, sell_shares);
+        let fee = self.calculate_fee(fill_price, sell_shares);
         let pnl = (fill_price - pos.avg_price) * sell_shares - fee;
 
         self.balance += revenue - fee;
@@ -275,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_new_wallet() {
-        let w = SimulatedWallet::new(dec!(100), dec!(5));
+        let w = SimulatedWallet::new(dec!(100), dec!(5), dec!(0.001));
         assert_eq!(w.balance(), dec!(100));
         assert_eq!(w.equity(), dec!(100));
         assert_eq!(w.mode(), WalletMode::Dry);
@@ -284,39 +286,44 @@ mod tests {
 
     #[test]
     fn test_calculate_fee() {
-        // fee = 0.02 * min(0.50, 0.50) * 100 = 1.00
-        let fee = SimulatedWallet::calculate_fee(dec!(0.50), dec!(100));
-        assert_eq!(fee, dec!(1.00));
+        // fee_rate=0.002 (Polymarket), price=0.50, shares=100
+        // fee = 0.002 * 0.50 * 100 = 0.10
+        let w = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.002));
+        let fee = w.calculate_fee(dec!(0.50), dec!(100));
+        assert_eq!(fee, dec!(0.10));
 
-        // fee = 0.02 * min(0.80, 0.20) * 100 = 0.40
-        let fee = SimulatedWallet::calculate_fee(dec!(0.80), dec!(100));
-        assert_eq!(fee, dec!(0.40));
+        // fee_rate=0.001 (crypto), price=600, shares=0.033
+        // fee = 0.001 * 600 * 0.033 = 0.0198
+        let w2 = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.001));
+        let fee2 = w2.calculate_fee(dec!(600), dec!(0.033));
+        assert!(fee2 > dec!(0)); // must be positive
     }
 
     #[test]
     fn test_buy_reduces_balance() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0)); // no slippage
+        // fee_rate=0.002, price=0.50, shares=10
+        // cost = 0.50 * 10 = 5.00, fee = 0.002 * 0.50 * 10 = 0.01
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.002)); // no slippage
         let result = w.buy("tok1", "Will X?", "Yes", dec!(0.50), dec!(10), "ai");
         assert!(result.is_some());
         let (price, fee, shares) = result.unwrap();
         assert_eq!(price, dec!(0.50));
         assert_eq!(shares, dec!(10));
-        // cost = 0.50 * 10 = 5.00, fee = 0.02 * 0.50 * 10 = 0.10
-        assert_eq!(fee, dec!(0.10));
-        assert_eq!(w.balance(), dec!(100) - dec!(5.00) - dec!(0.10));
+        assert_eq!(fee, dec!(0.01));
+        assert_eq!(w.balance(), dec!(100) - dec!(5.00) - dec!(0.01));
         assert_eq!(w.open_position_count(), 1);
     }
 
     #[test]
     fn test_buy_insufficient_balance() {
-        let mut w = SimulatedWallet::new(dec!(1), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(1), dec!(0), dec!(0.001));
         let result = w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(100), "ai");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_sell_closes_position_with_profit() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.001));
         w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(10), "ai");
         let result = w.sell("tok1", dec!(0.70), dec!(10), "ai");
         assert!(result.is_some());
@@ -327,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_sell_partial() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.001));
         w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(10), "ai");
         w.sell("tok1", dec!(0.60), dec!(5), "ai");
         assert_eq!(w.open_position_count(), 1);
@@ -337,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_settle_market_win() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.001));
         w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(10), "ai");
         let balance_after_buy = w.balance();
         let pnl = w.settle_market("tok1", true);
@@ -349,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_settle_market_loss() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.001));
         w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(10), "ai");
         let pnl = w.settle_market("tok1", false);
         assert!(pnl < Decimal::ZERO);
@@ -358,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_drawdown() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(0));
+        let mut w = SimulatedWallet::new(dec!(100), dec!(0), dec!(0.001));
         assert_eq!(w.drawdown_pct(), Decimal::ZERO);
         w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(40), "ai");
         // Balance dropped by ~20 (cost) + fees, equity should be ~100 still (position value)
@@ -371,9 +378,23 @@ mod tests {
 
     #[test]
     fn test_slippage_applied() {
-        let mut w = SimulatedWallet::new(dec!(100), dec!(10)); // 10 bps slippage
+        let mut w = SimulatedWallet::new(dec!(100), dec!(10), dec!(0.001)); // 10 bps slippage
         let result = w.buy("tok1", "Q?", "Yes", dec!(0.50), dec!(10), "ai");
         let (fill_price, _, _) = result.unwrap();
         assert!(fill_price > dec!(0.50)); // Buy slippage makes price worse
+    }
+
+    #[test]
+    fn test_fee_always_positive_for_high_price() {
+        // Regression: old Polymarket formula gave NEGATIVE fee for price > 1
+        // e.g. price=$600 → complement=-599 → min(600,-599)=-599 → NEGATIVE fee
+        // New formula: fee_rate * price * shares, always positive
+        let mut w = SimulatedWallet::new(dec!(10000), dec!(0), dec!(0.001));
+        let result = w.buy("btc1", "BTC price", "Up", dec!(600), dec!(1), "cs-strat");
+        assert!(result.is_some());
+        let (_, fee, _) = result.unwrap();
+        assert!(fee > dec!(0), "Fee must be positive for crypto high-price trades");
+        // 0.001 * 600 * 1 = 0.6
+        assert_eq!(fee, dec!(0.6));
     }
 }

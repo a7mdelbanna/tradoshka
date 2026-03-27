@@ -37,6 +37,16 @@ pub struct StrategySlot {
 impl StrategySlot {
     pub fn new(name: &str, market: &str, params: StrategyParams, initial_balance: Decimal) -> Self {
         let indicators = StrategyIndicatorEngine::from_params(&params);
+        // Market-aware fee rate and slippage
+        let (fee_rate, slippage) = if market.contains("poly") || name.starts_with("PM-") {
+            (dec!(0.002), dec!(5))    // 0.2%, 5 bps slippage (Polymarket)
+        } else if market.contains("perps") || name.starts_with("CP-") {
+            (dec!(0.0004), dec!(5))   // 0.04% (futures), 5 bps slippage
+        } else if market.contains("meme") || name.starts_with("MC-") {
+            (dec!(0.003), dec!(100))  // 0.3% (Raydium + gas proxy), 100 bps (1%) slippage
+        } else {
+            (dec!(0.001), dec!(5))    // 0.1% (spot crypto default), 5 bps slippage
+        };
         Self {
             name: name.into(),
             market: market.into(),
@@ -46,7 +56,7 @@ impl StrategySlot {
             killed_at: None,
             parent: None,
             generation: 1,
-            wallet: SimulatedWallet::new(initial_balance, dec!(5)),
+            wallet: SimulatedWallet::new(initial_balance, slippage, fee_rate),
             recorder: TradeRecorder::new(),
             indicators,
             cause_of_death: None,
