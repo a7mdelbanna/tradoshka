@@ -2,6 +2,7 @@
 import { Suspense, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { useTradingWs } from "@/hooks/useTradingWs";
 import { ModeBadge } from "@/components/trading/ModeBadge";
@@ -23,6 +24,7 @@ function TradingContent() {
   const searchParams = useSearchParams();
   const [selectedMarket, setSelectedMarket] = useState<string>("all");
   const [cryptoSubTab, setCryptoSubTab] = useState<"spot" | "perps">("spot");
+  const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
 
   // Read market selection from URL query params (set by sidebar)
   useEffect(() => {
@@ -36,6 +38,11 @@ function TradingContent() {
       else setCryptoSubTab("spot");
     }
   }, [searchParams]);
+
+  // Reset strategy picker when market changes
+  useEffect(() => {
+    setSelectedStrategy(null);
+  }, [selectedMarket]);
 
   const { wallet, wallets, trades, connected } = useTradingWs();
   const { data: equityData } = useQuery({ queryKey: ["equity-curve"], queryFn: api.equityCurve });
@@ -74,13 +81,70 @@ function TradingContent() {
     refetchInterval: 10000,
   });
 
+  // Evolution leaderboard for PM strategy wallets
+  const { data: evolutionData } = useQuery({
+    queryKey: ["evolution-leaderboard"],
+    queryFn: api.evolutionLeaderboard,
+    refetchInterval: 30000,
+  });
+
+  // Fetch specific strategy wallet when selected
+  const { data: strategyWallet } = useQuery({
+    queryKey: ["strategy-wallet", selectedStrategy],
+    queryFn: () => api.evolutionWallet(selectedStrategy!),
+    enabled: !!selectedStrategy,
+    refetchInterval: 10000,
+  });
+
   const handleScan = async () => { try { await api.triggerScan(); } catch {} };
   const handleCycle = async () => { try { await api.triggerCycle(); } catch {} };
 
+  // PM strategy wallet aggregation
+  const allStrategies: any[] = evolutionData?.strategies ?? evolutionData?.leaderboard ?? [];
+  const pmStrategies = allStrategies.filter((s: any) => {
+    const m = (s.market ?? "").toLowerCase();
+    return m.includes("poly");
+  });
+  const pmWithTrades = pmStrategies.filter((s: any) => (s.trades ?? 0) > 0);
+  const pmTotalEquity = pmStrategies.reduce((sum: number, s: any) => sum + (s.equity ?? 0), 0);
+  const pmTotalTrades = pmStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
+  const pmTotalPnl = pmStrategies.reduce((sum: number, s: any) => sum + (s.total_pnl ?? s.pnl ?? 0), 0);
+
   // Determine which wallet to show
-  const activeWallet = selectedMarket !== "all"
-    ? marketWallet || wallets[effectiveMarket] || null
-    : wallet;
+  const isPolymarketSelected = selectedMarket === "polymarket";
+  const mainWalletTrades = (marketWallet as any)?.total_trades ?? (marketWallet as any)?.open_positions ?? 0;
+  const showPmAggregated = isPolymarketSelected && mainWalletTrades === 0 && pmStrategies.length > 0 && !selectedStrategy;
+
+  // Build a synthetic aggregated wallet for PM when main is empty
+  const pmAggregatedWallet = showPmAggregated ? {
+    balance: pmStrategies.reduce((sum: number, s: any) => sum + (s.balance ?? 0), 0).toFixed(4),
+    equity: pmTotalEquity.toFixed(4),
+    unrealized_pnl: pmStrategies.reduce((sum: number, s: any) => sum + (s.unrealized_pnl ?? 0), 0).toFixed(4),
+    realized_pnl: pmStrategies.reduce((sum: number, s: any) => sum + (s.realized_pnl ?? 0), 0).toFixed(4),
+    drawdown_pct: "0",
+    open_positions: pmStrategies.reduce((sum: number, s: any) => sum + (s.open_positions ?? 0), 0),
+  } : null;
+
+  // Normalize strategy wallet response to WalletData shape
+  const normalizedStrategyWallet = strategyWallet ? {
+    balance: String(strategyWallet.balance ?? "0"),
+    equity: String(strategyWallet.equity ?? "0"),
+    unrealized_pnl: String(strategyWallet.unrealized_pnl ?? "0"),
+    realized_pnl: String(strategyWallet.realized_pnl ?? "0"),
+    drawdown_pct: String(strategyWallet.drawdown_pct ?? "0"),
+    open_positions: strategyWallet.open_positions ?? 0,
+  } : null;
+
+  let activeWallet: any;
+  if (selectedStrategy && normalizedStrategyWallet) {
+    activeWallet = normalizedStrategyWallet;
+  } else if (showPmAggregated) {
+    activeWallet = pmAggregatedWallet;
+  } else if (selectedMarket !== "all") {
+    activeWallet = marketWallet || wallets[effectiveMarket] || null;
+  } else {
+    activeWallet = wallet;
+  }
 
   // Determine which trades to show
   const activeTrades = selectedMarket !== "all" && marketTrades?.trades
@@ -197,8 +261,97 @@ function TradingContent() {
                 <span className="w-1 h-4 rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600" />
                 Portfolio
               </h2>
-              <PortfolioPanel wallet={activeWallet} marketLabel={marketLabel} marketType={marketType} />
+
+              {/* Strategy wallet picker — shown when Polymarket is selected */}
+              {isPolymarketSelected && pmStrategies.length > 0 && (
+                <div className="mb-4 space-y-3">
+                  <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                    {pmStrategies.length} Strategy Wallets
+                  </div>
+                  <select
+                    value={selectedStrategy || ""}
+                    onChange={(e) => setSelectedStrategy(e.target.value || null)}
+                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald-500/50"
+                  >
+                    <option value="">All Strategies (aggregated)</option>
+                    {pmStrategies.map((s: any) => (
+                      <option key={s.name ?? s.id} value={s.name ?? s.id}>
+                        {s.name ?? s.id} — ${((s.total_pnl ?? s.pnl ?? 0)).toFixed(2)} ({s.trades ?? 0} trades)
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* PM aggregated summary strip */}
+                  {!selectedStrategy && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-xl bg-slate-800/40 border border-slate-700/30 p-2.5 text-center">
+                        <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">Equity</p>
+                        <p className="text-xs font-bold text-white">${pmTotalEquity.toFixed(0)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-800/40 border border-slate-700/30 p-2.5 text-center">
+                        <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">Trades</p>
+                        <p className="text-xs font-bold text-white">{pmTotalTrades}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-800/40 border border-slate-700/30 p-2.5 text-center">
+                        <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">PnL</p>
+                        <p className={`text-xs font-bold ${pmTotalPnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {pmTotalPnl >= 0 ? "+" : ""}${pmTotalPnl.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <PortfolioPanel
+                wallet={activeWallet}
+                marketLabel={selectedStrategy ? `${selectedStrategy}` : marketLabel}
+                marketType={marketType}
+              />
             </div>
+
+            {/* PM top strategies panel — shown when aggregated view active */}
+            {isPolymarketSelected && !selectedStrategy && pmWithTrades.length > 0 && (
+              <div className="glass-panel rounded-2xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                    <span className="w-1 h-4 rounded-full bg-gradient-to-b from-blue-400 to-purple-500" />
+                    Top PM Strategies
+                  </h2>
+                  <Link
+                    href="/evolution"
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    View All →
+                  </Link>
+                </div>
+                <div className="space-y-2">
+                  {pmWithTrades.slice(0, 5).map((s: any, i: number) => {
+                    const pnl = s.total_pnl ?? s.pnl ?? 0;
+                    const pnlPositive = pnl >= 0;
+                    return (
+                      <button
+                        key={s.name ?? s.id}
+                        onClick={() => setSelectedStrategy(s.name ?? s.id)}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:border-slate-600/50 hover:bg-slate-800/50 transition-all duration-200 text-left"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[10px] font-mono text-slate-500 w-4 shrink-0">#{i + 1}</span>
+                          <span className="text-xs font-medium text-slate-200 truncate">{s.name ?? s.id}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 ml-2">
+                          <span className="text-[10px] text-slate-500">{s.trades ?? 0}t</span>
+                          <span className={`text-xs font-bold ${pnlPositive ? "text-emerald-400" : "text-red-400"}`}>
+                            {pnlPositive ? "+" : ""}${pnl.toFixed(2)}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="glass-panel rounded-2xl p-6">
               <StrategyHealth />
