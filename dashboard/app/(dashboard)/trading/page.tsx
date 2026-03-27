@@ -179,13 +179,14 @@ function TradingContent() {
     : activeWallet;
 
   // Count trades by market for tab badges — sourced from API, not WS trades
-  const polymarketCount = trades.filter((t) => {
-    const m = t.market?.toLowerCase();
-    if (m) return m === "polymarket";
-    return t.question?.includes("?");
-  }).length;
-  const spotCount = spotWallet?.total_trades ?? spotWallet?.open_positions ?? 0;
-  const perpsCount = perpsWallet?.total_trades ?? perpsWallet?.open_positions ?? 0;
+  // Use strategy wallet totals from evolution leaderboard
+  const pmStrategiesAll = allStrategies.filter((s: any) => (s.market ?? "").toLowerCase().includes("poly"));
+  const polymarketCount = pmStrategiesAll.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
+  // Use strategy wallet totals from evolution leaderboard (not main wallet counts)
+  const csStrategies = allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_spot");
+  const cpStrategies = allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_perps");
+  const spotCount = csStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
+  const perpsCount = cpStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
   const cryptoCount = spotCount + perpsCount;
 
   const marketLabel = selectedMarket === "crypto"
