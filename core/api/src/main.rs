@@ -87,6 +87,23 @@ async fn run_trading_loop(state: SharedState) {
                     report.hour, report.killed.len(), report.spawned.len(),
                     report.alive_count, report.dead_count
                 );
+                // Log recent evolution events to data persistence
+                let event_count = report.killed.len() + report.spawned.len();
+                let recent_events = s.evolution_engine.recent_events(event_count.max(1));
+                for event in recent_events {
+                    s.data_logger.log_evolution(event);
+                }
+                // Save hourly snapshot
+                s.data_logger.log_snapshot(&serde_json::json!({
+                    "hour": report.hour,
+                    "alive": report.alive_count,
+                    "dead": report.dead_count,
+                    "avg_sharpe": report.avg_sharpe,
+                    "best_strategy": report.best_strategy,
+                    "best_sharpe": report.best_sharpe,
+                    "killed": report.killed,
+                    "spawned": report.spawned,
+                }));
             }
             _ = health_ticker.tick() => {
                 let s = state.read().await;
@@ -272,6 +289,7 @@ async fn run_trading_loop(state: SharedState) {
                     };
 
                     let mut s = state.write().await;
+                    let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
                     let slot_names: Vec<String> = s.strategy_manager.alive_slots()
                         .iter()
                         .filter(|sl| sl.name.starts_with("CS-"))
@@ -359,11 +377,14 @@ async fn run_trading_loop(state: SharedState) {
                                 thesis.take_profit,
                             );
 
-                            // Cap to $10 and convert USD amount to coin quantity
-                            let dollar_size = thesis.position_size.min(dec!(10));
+                            // Aggressive capital deployment: use strategy's capital_usage_pct
+                            let capital_pct = slot.params.get("capital_usage_pct") / 100.0;
+                            let target_positions = slot.params.get("auto_position_count").max(1.0) as usize;
+                            let available = slot.wallet.equity() * Decimal::from_f64(capital_pct).unwrap_or(dec!(0.75));
+                            let per_position = available / Decimal::from(target_positions as u32);
                             let size = if asset.price > rust_decimal::Decimal::ZERO {
-                                (dollar_size / asset.price).round_dp(8)
-                            } else { rust_decimal::Decimal::ZERO };
+                                (per_position / asset.price).round_dp(6)
+                            } else { continue };
                             if size <= rust_decimal::Decimal::ZERO { continue; }
 
                             let is_long = thesis.take_profit > thesis.entry_price;
@@ -389,12 +410,26 @@ async fn run_trading_loop(state: SharedState) {
                                     slot_name,
                                     &thesis,
                                 ));
+                                // SAFETY: data_logger is a disjoint field from strategy_manager.
+                                unsafe {
+                                    (*data_logger).log_trade(&serde_json::json!({
+                                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                                        "strategy": slot_name,
+                                        "market": "crypto_spot",
+                                        "symbol": asset.symbol,
+                                        "price": fill_price.to_string(),
+                                        "size": filled.to_string(),
+                                        "capital_pct": capital_pct * 100.0,
+                                        "params": slot.params.params,
+                                    }));
+                                }
                                 tracing::info!(
-                                    "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x [EMA {}/{}={}/{} {}] | {}",
+                                    "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x [EMA {}/{}={}/{} {}] cap={:.0}% | {}",
                                     slot_name, filled, asset.symbol, fill_price,
                                     thesis.reward_risk_ratio,
                                     ema_fast_period, ema_slow_period,
                                     ema_fast_val as i64, ema_slow_val as i64, ema_signal,
+                                    capital_pct * 100.0,
                                     thesis.reasoning.chars().take(80).collect::<String>()
                                 );
                             }
@@ -570,6 +605,7 @@ async fn run_trading_loop(state: SharedState) {
                     };
 
                     let mut s = state.write().await;
+                    let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
                     let cp_slot_names: Vec<String> = s.strategy_manager.alive_slots()
                         .iter()
                         .filter(|sl| sl.name.starts_with("CP-"))
@@ -634,11 +670,14 @@ async fn run_trading_loop(state: SharedState) {
                                 Err(_) => continue,
                             };
 
-                            // Cap to $10 and convert USD amount to coin quantity
-                            let dollar_size = thesis.position_size.min(dec!(10));
+                            // Aggressive capital deployment: use strategy's capital_usage_pct
+                            let capital_pct = slot.params.get("capital_usage_pct") / 100.0;
+                            let target_positions = slot.params.get("auto_position_count").max(1.0) as usize;
+                            let available = slot.wallet.equity() * Decimal::from_f64(capital_pct).unwrap_or(dec!(0.75));
+                            let per_position = available / Decimal::from(target_positions as u32);
                             let size = if asset.price > rust_decimal::Decimal::ZERO {
-                                (dollar_size / asset.price).round_dp(8)
-                            } else { rust_decimal::Decimal::ZERO };
+                                (per_position / asset.price).round_dp(6)
+                            } else { continue };
                             if size <= rust_decimal::Decimal::ZERO { continue; }
 
                             let is_long = thesis.take_profit > thesis.entry_price;
@@ -664,10 +703,24 @@ async fn run_trading_loop(state: SharedState) {
                                     slot_name,
                                     &thesis,
                                 ));
+                                // SAFETY: data_logger is a disjoint field from strategy_manager.
+                                unsafe {
+                                    (*data_logger).log_trade(&serde_json::json!({
+                                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                                        "strategy": slot_name,
+                                        "market": "crypto_perps",
+                                        "symbol": asset.symbol,
+                                        "price": fill_price.to_string(),
+                                        "size": filled.to_string(),
+                                        "capital_pct": capital_pct * 100.0,
+                                        "params": slot.params.params,
+                                    }));
+                                }
                                 tracing::info!(
-                                    "EVOLUTION {} CP BUY {} {} @ {} — R:R {:.1}x | {}",
+                                    "EVOLUTION {} CP BUY {} {} @ {} — R:R {:.1}x cap={:.0}% | {}",
                                     slot_name, filled, asset.symbol, fill_price,
                                     thesis.reward_risk_ratio,
+                                    capital_pct * 100.0,
                                     thesis.reasoning.chars().take(50).collect::<String>()
                                 );
                             }

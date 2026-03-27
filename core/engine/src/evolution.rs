@@ -145,26 +145,68 @@ impl EvolutionEngine {
             }
         }
 
-        // Spawn from top 10% within this market — same count as killed to maintain balance
-        let spawn_count = killed.len().max(1);
+        // Spawn replacements: 40% mutation, 40% crossover, 20% random
+        let spawn_count = killed.len();
+        if spawn_count == 0 { return (killed, spawned); }
+
+        // Get top performers for this market
         let top: Vec<(String, StrategyParams, String, u32)> = market_ranked.iter()
-            .take(spawn_count)
+            .take(5.max(spawn_count))
             .filter_map(|(name, _)| {
                 manager.get(name).map(|s| (s.name.clone(), s.params.clone(), s.market.clone(), s.generation))
             })
             .collect();
 
-        for (parent_name, parent_params, market, gen) in top {
-            if !manager.can_spawn() { break; }
-            let seed = (self.hour * 31 + parent_name.len() as u64 * 17) % 1000;
-            let (new_params, mutation) = mutate(&parent_params, seed);
-            let base = parent_name.split("-v").next().unwrap_or(&parent_name);
-            let new_name = format!("{}-v{}", base, gen + 1);
+        if top.is_empty() { return (killed, spawned); }
 
+        for i in 0..spawn_count {
+            if !manager.can_spawn() { break; }
+
+            // 0,1 = mutation (40%), 2,3 = crossover (40%), 4 = random (20%)
+            let spawn_type = i % 5;
+            let seed = (self.hour * 31 + i as u64 * 17 + killed.len() as u64 * 7) % 10000;
+
+            let (new_name, new_params, market, gen, details) = if spawn_type < 2 && !top.is_empty() {
+                // MUTATION: tweak one param from a top performer
+                let parent = &top[i % top.len()];
+                let (params, mutation) = mutate(&parent.1, seed);
+                let base = parent.0.split("-v").next().unwrap_or(&parent.0);
+                let name = format!("{}-v{}", base, parent.3 + 1);
+                let details = format!("MUTATION from {} (gen {}). {} {:.2} → {:.2} ({:+.0}%)",
+                    parent.0, parent.3, mutation.param_name, mutation.old_value, mutation.new_value, mutation.change_pct);
+                (name, params, parent.2.clone(), parent.3 + 1, details)
+
+            } else if spawn_type < 4 && top.len() >= 2 {
+                // CROSSOVER: combine params from two top performers
+                let parent_a = &top[0];
+                let parent_b = &top[1 + (i % (top.len() - 1))];
+                let params = crate::mutation::crossover(&parent_a.1, &parent_b.1, seed);
+                let name = format!("{}-x-{}-v{}",
+                    parent_a.0.split("-v").next().unwrap_or(&parent_a.0),
+                    parent_b.0.split("-v").next().unwrap_or(&parent_b.0),
+                    parent_a.3.max(parent_b.3) + 1);
+                let gen = parent_a.3.max(parent_b.3) + 1;
+                let details = format!("CROSSOVER of {} + {} (gen {}). Hybrid strategy.",
+                    parent_a.0, parent_b.0, gen);
+                (name, params, parent_a.2.clone(), gen, details)
+
+            } else {
+                // RANDOM EXPLORER: completely fresh random params
+                let params = crate::mutation::random_explorer(seed);
+                let name = format!("{}-explorer-{}", prefix.trim_end_matches('-'), self.hour);
+                let details = format!("RANDOM EXPLORER. Fresh params: leverage={:.0}, timeframe={:.0}min, capital={:.0}%",
+                    params.get("auto_leverage"), params.get("auto_timeframe"), params.get("capital_usage_pct"));
+                (name, params, top[0].2.clone(), 1, details)
+            };
+
+            // Skip if name already exists
             if manager.get(&new_name).is_some() { continue; }
 
-            let slot = StrategySlot::new(&new_name, &market, new_params, dec!(100))
-                .with_parent(&parent_name, gen + 1);
+            let mut slot = StrategySlot::new(&new_name, &market, new_params, dec!(100));
+            slot.generation = gen;
+            if spawn_type < 4 {
+                slot.parent = Some(top[0].0.clone());
+            }
             manager.add_slot(slot);
             spawned.push(new_name.clone());
 
@@ -173,9 +215,33 @@ impl EvolutionEngine {
                 hour: self.hour,
                 action: EvolutionAction::Spawned,
                 strategy_name: new_name,
-                details: format!("Spawned from {} (gen {}). Mutated {}: {:.2} → {:.2} ({:+.0}%)",
-                    parent_name, gen, mutation.param_name, mutation.old_value, mutation.new_value, mutation.change_pct),
+                details,
             });
+        }
+
+        // Self-adjust survivors: adapt execution params based on recent performance
+        let survivor_names: Vec<String> = manager.alive_slots().iter()
+            .filter(|s| s.name.starts_with(prefix) && s.trade_count() > 0)
+            .map(|s| s.name.clone())
+            .collect();
+
+        for name in &survivor_names {
+            if let Some(slot) = manager.get_mut(name) {
+                let pnl = slot.pnl_pct();
+                let trades = slot.trade_count();
+                if trades < 3 { continue; } // Not enough data to adjust
+
+                // If losing with high leverage → reduce
+                if pnl < -1.0 && slot.params.get("auto_leverage") > 3.0 {
+                    let old = slot.params.get("auto_leverage");
+                    slot.params.set("auto_leverage", (old * 0.8).max(1.0));
+                }
+                // If capital usage too low → increase
+                let capital_pct = slot.params.get("capital_usage_pct");
+                if capital_pct < 50.0 {
+                    slot.params.set("capital_usage_pct", (capital_pct + 10.0).min(95.0));
+                }
+            }
         }
 
         (killed, spawned)
@@ -259,5 +325,22 @@ mod tests {
         engine.evolve(&mut mgr);
         let recent = engine.recent_events(5);
         assert!(!recent.is_empty());
+    }
+
+    #[test]
+    fn test_evolution_spawns_crossover_and_mutation() {
+        let mut engine = EvolutionEngine::new();
+        engine.min_trades_for_ranking = 0;
+        let mut mgr = setup_manager();
+        engine.evolve(&mut mgr);
+        // Check that timeline has spawned events
+        let spawned_events: Vec<_> = engine.timeline.iter()
+            .filter(|e| e.action == EvolutionAction::Spawned)
+            .collect();
+        assert!(!spawned_events.is_empty());
+        // Check that at least some events have MUTATION or CROSSOVER in details
+        let has_mutation = spawned_events.iter().any(|e| e.details.contains("MUTATION"));
+        let has_crossover_or_random = spawned_events.iter().any(|e| e.details.contains("CROSSOVER") || e.details.contains("RANDOM EXPLORER") || e.details.contains("MUTATION"));
+        assert!(has_mutation || has_crossover_or_random);
     }
 }

@@ -17,6 +17,7 @@ pub mod mutation;
 pub mod strategy_wallet;
 pub mod evolution;
 pub mod indicator_state;
+pub mod data_logger;
 
 pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
@@ -37,3 +38,4 @@ pub use mutation::{StrategyParams, MutationResult, mutate, initial_strategies};
 pub use strategy_wallet::{StrategyWalletManager, StrategySlot, SlotStatus};
 pub use evolution::{EvolutionEngine, EvolutionEvent, EvolutionAction, EvolutionReport};
 pub use indicator_state::{StrategyIndicatorEngine, AssetIndicators};
+pub use data_logger::DataLogger;

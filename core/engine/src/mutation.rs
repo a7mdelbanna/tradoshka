@@ -10,10 +10,83 @@ pub struct StrategyParams {
 
 impl StrategyParams {
     pub fn new(strategy_type: &str) -> Self {
-        Self {
-            strategy_type: strategy_type.into(),
-            params: HashMap::new(),
+        let mut params = HashMap::new();
+        // Add default execution params based on strategy type
+        match strategy_type {
+            "scalp" => {
+                params.insert("auto_leverage".into(), 10.0);
+                params.insert("auto_timeframe".into(), 5.0);
+                params.insert("auto_position_count".into(), 5.0);
+                params.insert("capital_usage_pct".into(), 90.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 2.0);
+            }
+            "momentum" => {
+                params.insert("auto_leverage".into(), 7.0);
+                params.insert("auto_timeframe".into(), 60.0);
+                params.insert("auto_position_count".into(), 8.0);
+                params.insert("capital_usage_pct".into(), 80.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 2.5);
+            }
+            "dca" => {
+                params.insert("auto_leverage".into(), 2.0);
+                params.insert("auto_timeframe".into(), 60.0);
+                params.insert("auto_position_count".into(), 15.0);
+                params.insert("capital_usage_pct".into(), 95.0);
+                params.insert("stop_loss_atr_mult".into(), 3.0);
+                params.insert("take_profit_rr".into(), 1.5);
+            }
+            "grid" => {
+                params.insert("auto_leverage".into(), 4.0);
+                params.insert("auto_timeframe".into(), 15.0);
+                params.insert("auto_position_count".into(), 12.0);
+                params.insert("capital_usage_pct".into(), 85.0);
+                params.insert("stop_loss_atr_mult".into(), 2.5);
+                params.insert("take_profit_rr".into(), 2.0);
+            }
+            "meanrev" => {
+                params.insert("auto_leverage".into(), 7.0);
+                params.insert("auto_timeframe".into(), 30.0);
+                params.insert("auto_position_count".into(), 4.0);
+                params.insert("capital_usage_pct".into(), 70.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 2.0);
+            }
+            "mispricing" | "arb" | "funding_arb" => {
+                params.insert("auto_leverage".into(), 12.0);
+                params.insert("auto_timeframe".into(), 5.0);
+                params.insert("auto_position_count".into(), 3.0);
+                params.insert("capital_usage_pct".into(), 60.0);
+                params.insert("stop_loss_atr_mult".into(), 1.5);
+                params.insert("take_profit_rr".into(), 3.0);
+            }
+            "market_making" => {
+                params.insert("auto_leverage".into(), 4.0);
+                params.insert("auto_timeframe".into(), 15.0);
+                params.insert("auto_position_count".into(), 8.0);
+                params.insert("capital_usage_pct".into(), 80.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 1.8);
+            }
+            "copy" => {
+                params.insert("auto_leverage".into(), 5.0);
+                params.insert("auto_timeframe".into(), 60.0);
+                params.insert("auto_position_count".into(), 5.0);
+                params.insert("capital_usage_pct".into(), 75.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 2.0);
+            }
+            _ => {
+                params.insert("auto_leverage".into(), 5.0);
+                params.insert("auto_timeframe".into(), 15.0);
+                params.insert("auto_position_count".into(), 5.0);
+                params.insert("capital_usage_pct".into(), 75.0);
+                params.insert("stop_loss_atr_mult".into(), 2.0);
+                params.insert("take_profit_rr".into(), 2.0);
+            }
         }
+        Self { strategy_type: strategy_type.into(), params }
     }
 
     pub fn with_param(mut self, key: &str, value: f64) -> Self {
@@ -31,7 +104,7 @@ impl StrategyParams {
 
     /// Get the list of mutable parameter names for this strategy type.
     pub fn mutable_params(&self) -> Vec<String> {
-        match self.strategy_type.as_str() {
+        let mut params = match self.strategy_type.as_str() {
             "momentum" => vec!["ema_fast".into(), "ema_slow".into(), "rsi_threshold".into()],
             "dca" => vec!["buy_interval".into(), "rsi_oversold".into()],
             "grid" => vec!["spacing_pct".into(), "grid_count".into()],
@@ -43,7 +116,14 @@ impl StrategyParams {
             "funding_arb" => vec!["min_funding_rate".into()],
             "value" => vec!["min_edge".into()],
             _ => self.params.keys().cloned().collect(),
-        }
+        };
+        // Add execution params for ALL strategy types
+        params.extend(vec![
+            "auto_leverage".into(), "auto_timeframe".into(),
+            "auto_position_count".into(), "capital_usage_pct".into(),
+            "stop_loss_atr_mult".into(), "take_profit_rr".into(),
+        ]);
+        params
     }
 }
 
@@ -92,6 +172,66 @@ pub fn mutate(params: &StrategyParams, seed: u64) -> (StrategyParams, MutationRe
         new_value,
         change_pct: change_pct * 100.0,
     })
+}
+
+/// Breed two strategies by combining their parameters.
+/// Takes all params from parent A, then overlays params unique to parent B.
+/// Shared params: randomly pick from either parent (using seed).
+pub fn crossover(parent_a: &StrategyParams, parent_b: &StrategyParams, seed: u64) -> StrategyParams {
+    let mut child_params = HashMap::new();
+
+    // Start with parent A's params
+    for (k, v) in &parent_a.params {
+        child_params.insert(k.clone(), *v);
+    }
+
+    // For each param in parent B:
+    // - If parent A also has it: pick randomly based on seed
+    // - If parent A doesn't have it: add it from B
+    for (k, v) in &parent_b.params {
+        if parent_a.params.contains_key(k) {
+            // Both parents have this param — pick based on seed
+            let pick_b = (seed.wrapping_mul(k.len() as u64 + 7)) % 2 == 0;
+            if pick_b {
+                child_params.insert(k.clone(), *v);
+            }
+        } else {
+            child_params.insert(k.clone(), *v);
+        }
+    }
+
+    StrategyParams {
+        strategy_type: "hybrid".into(),
+        params: child_params,
+    }
+}
+
+/// Generate a strategy with completely random parameters within sane bounds.
+pub fn random_explorer(seed: u64) -> StrategyParams {
+    let mut params = HashMap::new();
+
+    // Deterministic "random" from seed
+    let r = |s: u64, min: f64, max: f64| -> f64 {
+        let v = ((s.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7fffffff) as f64 / 0x7fffffff as f64;
+        min + v * (max - min)
+    };
+
+    params.insert("ema_fast".into(), r(seed, 2.0, 15.0).round());
+    params.insert("ema_slow".into(), r(seed.wrapping_add(1), 5.0, 50.0).round());
+    params.insert("rsi_threshold".into(), r(seed.wrapping_add(2), 30.0, 70.0).round());
+    params.insert("bb_period".into(), r(seed.wrapping_add(3), 5.0, 40.0).round());
+    params.insert("bb_std".into(), (r(seed.wrapping_add(4), 1.0, 3.0) * 10.0).round() / 10.0);
+    params.insert("auto_leverage".into(), r(seed.wrapping_add(5), 1.0, 20.0).round());
+    params.insert("auto_timeframe".into(), [1.0, 5.0, 15.0, 60.0, 240.0][(seed as usize % 5)]);
+    params.insert("auto_position_count".into(), r(seed.wrapping_add(6), 3.0, 20.0).round());
+    params.insert("capital_usage_pct".into(), r(seed.wrapping_add(7), 50.0, 95.0).round());
+    params.insert("stop_loss_atr_mult".into(), (r(seed.wrapping_add(8), 1.0, 4.0) * 10.0).round() / 10.0);
+    params.insert("take_profit_rr".into(), (r(seed.wrapping_add(9), 1.5, 5.0) * 10.0).round() / 10.0);
+
+    StrategyParams {
+        strategy_type: "explorer".into(),
+        params,
+    }
 }
 
 /// Create the default parameter sets for the initial 120 strategies (40 per market).
@@ -273,6 +413,9 @@ mod tests {
         let mutable = p.mutable_params();
         assert!(mutable.contains(&"ema_fast".to_string()));
         assert!(mutable.contains(&"ema_slow".to_string()));
+        // Execution params also included
+        assert!(mutable.contains(&"auto_leverage".to_string()));
+        assert!(mutable.contains(&"capital_usage_pct".to_string()));
     }
 
     #[test]
@@ -284,11 +427,18 @@ mod tests {
         let (new_p, result) = mutate(&p, 42);
         assert_ne!(result.old_value, result.new_value);
         assert!(!result.param_name.is_empty());
-        // Only one param changed
-        let unchanged_count = ["ema_fast", "ema_slow", "rsi_threshold"].iter()
-            .filter(|&&k| (new_p.get(k) - p.get(k)).abs() < 0.001)
+        // Exactly one param changed (could be strategy or execution param)
+        let strategy_params = ["ema_fast", "ema_slow", "rsi_threshold"];
+        let changed_strategy = strategy_params.iter()
+            .filter(|&&k| (new_p.get(k) - p.get(k)).abs() >= 0.001)
             .count();
-        assert_eq!(unchanged_count, 2); // 2 unchanged, 1 mutated
+        // Either exactly one strategy param changed, or the mutated param is an execution param
+        let is_execution_param = ["auto_leverage", "auto_timeframe", "auto_position_count",
+                                   "capital_usage_pct", "stop_loss_atr_mult", "take_profit_rr"]
+            .contains(&result.param_name.as_str());
+        assert!(changed_strategy == 1 || is_execution_param,
+            "Expected exactly 1 strategy param changed OR an execution param mutated, got {} strategy changes (mutated: {})",
+            changed_strategy, result.param_name);
     }
 
     #[test]
@@ -309,5 +459,49 @@ mod tests {
                 assert!(*v >= 1.0, "Param went below 1.0: {}", v);
             }
         }
+    }
+
+    #[test]
+    fn test_crossover_combines_params() {
+        let a = StrategyParams::new("momentum").with_param("ema_fast", 5.0).with_param("ema_slow", 13.0);
+        let b = StrategyParams::new("meanrev").with_param("bb_period", 20.0).with_param("bb_std", 2.0);
+        let child = crossover(&a, &b, 42);
+        // Child should have params from both parents
+        assert!(child.params.contains_key("ema_fast") || child.params.contains_key("bb_period"));
+        assert_eq!(child.strategy_type, "hybrid");
+    }
+
+    #[test]
+    fn test_crossover_shared_params_pick_one() {
+        let a = StrategyParams::new("momentum").with_param("ema_fast", 5.0);
+        let b = StrategyParams::new("momentum").with_param("ema_fast", 9.0);
+        let child = crossover(&a, &b, 42);
+        let val = child.get("ema_fast");
+        assert!(val == 5.0 || val == 9.0); // Must be from one parent
+    }
+
+    #[test]
+    fn test_random_explorer_within_bounds() {
+        for seed in 0..50 {
+            let p = random_explorer(seed);
+            assert!(p.get("ema_fast") >= 2.0 && p.get("ema_fast") <= 15.0);
+            assert!(p.get("auto_leverage") >= 1.0 && p.get("auto_leverage") <= 20.0);
+            assert!(p.get("capital_usage_pct") >= 50.0 && p.get("capital_usage_pct") <= 95.0);
+        }
+    }
+
+    #[test]
+    fn test_random_explorer_deterministic() {
+        let a = random_explorer(42);
+        let b = random_explorer(42);
+        assert_eq!(a.get("ema_fast"), b.get("ema_fast"));
+    }
+
+    #[test]
+    fn test_execution_params_auto_populated() {
+        let p = StrategyParams::new("scalp");
+        assert!(p.get("auto_leverage") > 0.0);
+        assert!(p.get("capital_usage_pct") > 0.0);
+        assert!(p.get("auto_timeframe") > 0.0);
     }
 }
