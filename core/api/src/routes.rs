@@ -577,6 +577,51 @@ pub async fn get_wallet_by_market(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Force-close all strategy wallet positions (for evolution evaluation)
+// ---------------------------------------------------------------------------
+
+pub async fn trigger_close_check(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let mut state = state.write().await;
+    let mut total_closed = 0usize;
+
+    let slot_names: Vec<String> = state.strategy_manager.alive_slots()
+        .iter()
+        .filter(|sl| sl.trade_count() > 0)
+        .map(|sl| sl.name.clone())
+        .collect();
+
+    for slot_name in &slot_names {
+        if let Some(slot) = state.strategy_manager.get_mut(slot_name) {
+            // Collect all open position symbols + prices before mutating the wallet
+            let to_close: Vec<(String, rust_decimal::Decimal)> = slot.wallet
+                .positions()
+                .values()
+                .map(|p| (p.token_id.clone(), p.current_price))
+                .collect();
+
+            for (symbol, price) in &to_close {
+                if *price > rust_decimal::Decimal::ZERO {
+                    if let Some((_, _, pnl)) = slot.wallet.sell(
+                        symbol,
+                        *price,
+                        rust_decimal::Decimal::MAX,
+                        slot_name,
+                    ) {
+                        slot.recorder.close_trade(symbol, slot_name, pnl);
+                        total_closed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "closed": total_closed,
+        "message": format!("Force-closed {} positions across all strategy wallets", total_closed),
+    }))
+}
+
 pub async fn get_trades_by_market(
     State(state): State<SharedState>,
     axum::extract::Path(market): axum::extract::Path<String>,

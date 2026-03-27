@@ -33,6 +33,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/orchestrator", get(routes::get_orchestrator_status))
         .route("/api/orchestrator/cycle", post(routes::trigger_cycle))
         .route("/api/orchestrator/scan", post(routes::trigger_scan))
+        .route("/api/orchestrator/close-all", post(routes::trigger_close_check))
         .route("/api/evolution/leaderboard", get(evolution_routes::get_leaderboard))
         .route("/api/evolution/timeline", get(evolution_routes::get_timeline))
         .route("/api/evolution/graveyard", get(evolution_routes::get_graveyard))

@@ -969,6 +969,109 @@ async fn run_trading_loop(state: SharedState) {
                         }
                     }
                 }
+
+                // --- Position monitor: ALL strategy wallets (CS-*, PM-*, CP-*) ---
+                // This is the critical fix: strategy wallets had no position closing, so
+                // positions sat open forever, win rate stayed 0%, and evolution was blind.
+                {
+                    let mut s = state.write().await;
+                    let slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.trade_count() > 0)
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) => sl,
+                            None => continue,
+                        };
+
+                        // Use monitor_all to check all stop conditions (SL, TS, TP, time stop)
+                        let checks = tradoshka_engine::PositionMonitor::monitor_all(
+                            &slot.wallet, &slot.recorder,
+                        );
+
+                        for check in &checks {
+                            if check.action != tradoshka_engine::PositionAction::Hold {
+                                if let Some((_, _, pnl)) = slot.wallet.sell(
+                                    &check.symbol,
+                                    check.current_price,
+                                    rust_decimal::Decimal::MAX,
+                                    slot_name,
+                                ) {
+                                    slot.recorder.close_trade(&check.symbol, slot_name, pnl);
+                                    tracing::info!(
+                                        "STRATEGY STOP: {} | {} | {} | PnL: ${:.4}",
+                                        slot_name, check.symbol, check.reason, pnl
+                                    );
+                                    s.data_logger.log_trade(&serde_json::json!({
+                                        "type": "CLOSE",
+                                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                                        "strategy": slot_name,
+                                        "symbol": check.symbol,
+                                        "close_price": check.current_price.to_string(),
+                                        "pnl": pnl.to_string(),
+                                        "reason": check.reason,
+                                    }));
+                                    // Only close one position per cycle per strategy (avoid cascading)
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Time-based position closing for strategy wallets (dry mode evaluation) ---
+                // Force-close positions older than 1 hour so capital cycles within the evaluation
+                // window and strategies accumulate win/loss records that evolution can rank.
+                {
+                    let mut s = state.write().await;
+                    let slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.trade_count() > 0)
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    let now = chrono::Utc::now();
+                    const MAX_AGE_HOURS: f64 = 1.0; // Aggressive for dry mode evaluation
+
+                    for slot_name in &slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) => sl,
+                            None => continue,
+                        };
+
+                        // Collect stale positions (opened_at data is on WalletPosition)
+                        let stale: Vec<(String, rust_decimal::Decimal, f64)> = slot.wallet
+                            .positions()
+                            .iter()
+                            .filter_map(|(_key, pos)| {
+                                let hours_held = (now - pos.opened_at).num_minutes() as f64 / 60.0;
+                                if hours_held >= MAX_AGE_HOURS {
+                                    Some((pos.token_id.clone(), pos.current_price, hours_held))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        for (symbol, current_price, hours_held) in &stale {
+                            if let Some((_, _, pnl)) = slot.wallet.sell(
+                                symbol,
+                                *current_price,
+                                rust_decimal::Decimal::MAX,
+                                slot_name,
+                            ) {
+                                slot.recorder.close_trade(symbol, slot_name, pnl);
+                                tracing::info!(
+                                    "STRATEGY TIME CLOSE: {} | {} | held {:.1}h | PnL: ${:.4}",
+                                    slot_name, symbol, hours_held, pnl
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
