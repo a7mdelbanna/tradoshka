@@ -1,19 +1,18 @@
 import sys
 import os
-# Add shared strategies to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'shared'))
 
 from tradoshka_strategy import BaseStrategy, MarketEvent, Signal, SignalDirection
 from .simulation import PredictionSimulation
 from .world_builder import WorldBuilder
 from .scorer import PredictionScorer
-from .llm_client import LLMConfig
+from .claude_client import ClaudeConfig
 
 
 class AIPredictorStrategy(BaseStrategy):
-    def __init__(self, llm_config: LLMConfig | None = None, agent_count: int = 20):
+    def __init__(self, claude_config: ClaudeConfig | None = None, agent_count: int = 20):
         super().__init__("ai_predictor", "polymarket")
-        self.sim = PredictionSimulation(llm_config=llm_config, agent_count=agent_count)
+        self.sim = PredictionSimulation(claude_config=claude_config, agent_count=agent_count)
         self.world_builder = WorldBuilder()
         self._last_predictions: dict[str, float] = {}
 
