@@ -306,12 +306,15 @@ async fn run_trading_loop(state: SharedState) {
                             _ => continue,
                         };
 
+                        // Use strategy's own take_profit_rr if set, otherwise default to 2.0
+                        let rr = slot.params.get("take_profit_rr");
+                        let rr_target = if rr > 0.0 { rr } else { 2.0 };
                         let config = ResearchConfig {
                             equity: slot.wallet.equity(),
                             risk_pct: 1.0,
-                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 }, // Easier for first trades
-                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },         // 1 signal enough to start
-                            min_rr_ratio: 2.0,
+                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 },
+                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },
+                            min_rr_ratio: rr_target,
                             strategy_tier: "Unproven".into(),
                             time_stop_hours: 24,
                         };
@@ -900,14 +903,16 @@ async fn run_trading_loop(state: SharedState) {
                             _ => continue,
                         };
 
+                        let rr = slot.params.get("take_profit_rr");
+                        let rr_target = if rr > 0.0 { rr } else { 2.0 };
                         let config = ResearchConfig {
                             equity: slot.wallet.equity(),
                             risk_pct: 1.0,
-                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 }, // Easier for first trades
-                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },         // 1 signal enough to start
-                            min_rr_ratio: 2.0,
+                            min_confidence: if slot.trade_count() == 0 { 0.40 } else { 0.60 },
+                            min_signals: if slot.trade_count() == 0 { 1 } else { 2 },
+                            min_rr_ratio: rr_target,
                             strategy_tier: "Unproven".into(),
-                            time_stop_hours: 12, // Shorter hold for perps-style strategies
+                            time_stop_hours: 12,
                         };
 
                         for asset in &assets {
