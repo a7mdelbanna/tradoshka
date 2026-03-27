@@ -18,12 +18,14 @@ import { PLHeatmap } from "@/components/charts/PLHeatmap";
 const MARKET_LABELS: Record<string, string> = {
   polymarket: "Polymarket",
   crypto: "Crypto",
+  memecoins: "Meme Coins",
 };
 
 function TradingContent() {
   const searchParams = useSearchParams();
   const [selectedMarket, setSelectedMarket] = useState<string>("all");
   const [cryptoSubTab, setCryptoSubTab] = useState<"spot" | "perps">("spot");
+  const [mcSubTab, setMcSubTab] = useState<"all" | "ed" | "tr" | "wc">("all");
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
 
   // Read market selection from URL query params (set by sidebar)
@@ -36,6 +38,8 @@ function TradingContent() {
       setSelectedMarket("crypto");
       if (sub === "perps") setCryptoSubTab("perps");
       else setCryptoSubTab("spot");
+    } else if (market === "memecoins") {
+      setSelectedMarket("memecoins");
     }
   }, [searchParams]);
 
@@ -51,6 +55,7 @@ function TradingContent() {
   const { data: cryptoData } = useQuery({ queryKey: ["crypto-assets"], queryFn: api.cryptoAssets, refetchInterval: 10000 });
 
   // When crypto is selected, use the sub-tab to determine which endpoint to call
+  // Meme coins always use the "memecoins" key (no main wallet, always aggregated)
   const effectiveMarket = selectedMarket === "crypto" ? cryptoSubTab : selectedMarket;
 
   // Fetch per-market wallet data when a specific market is selected
@@ -102,13 +107,26 @@ function TradingContent() {
   // Strategy wallet aggregation — filtered by current market/subtab
   const allStrategies: any[] = evolutionData?.strategies ?? evolutionData?.leaderboard ?? [];
 
+  // Meme coin strategy groups (filtered by name prefix)
+  const mcStrategies = allStrategies.filter((s: any) => s.name?.startsWith("MC-"));
+  const mcEdStrategies = mcStrategies.filter((s: any) => s.name?.includes("-ED-"));
+  const mcTrStrategies = mcStrategies.filter((s: any) => s.name?.includes("-TR-"));
+  const mcWcStrategies = mcStrategies.filter((s: any) => s.name?.includes("-WC-"));
+
+  const filteredMcStrategies = mcSubTab === "all" ? mcStrategies
+    : mcSubTab === "ed" ? mcEdStrategies
+    : mcSubTab === "tr" ? mcTrStrategies
+    : mcWcStrategies;
+
   const marketStrategies = selectedMarket === "polymarket"
     ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase().includes("poly"))
     : selectedMarket === "crypto" && cryptoSubTab === "spot"
       ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_spot")
       : selectedMarket === "crypto" && cryptoSubTab === "perps"
         ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_perps")
-        : [];
+        : selectedMarket === "memecoins"
+          ? filteredMcStrategies
+          : [];
 
   // Keep pmStrategies as alias for backwards compat with aggregation below
   const pmStrategies = marketStrategies;
@@ -119,6 +137,7 @@ function TradingContent() {
 
   // Dynamic label for the "Top Strategies" card
   const strategyMarketLabel = selectedMarket === "polymarket" ? "PM"
+    : selectedMarket === "memecoins" ? "MC"
     : cryptoSubTab === "perps" ? "CP" : "CS";
 
   // Determine which wallet to show
@@ -188,6 +207,9 @@ function TradingContent() {
   const spotCount = csStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
   const perpsCount = cpStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
   const cryptoCount = spotCount + perpsCount;
+  // Meme coin trade counts from evolution leaderboard (MC-* strategies)
+  const mcAllStrategies = allStrategies.filter((s: any) => s.name?.startsWith("MC-"));
+  const memecoinsCount = mcAllStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
 
   const marketLabel = selectedMarket === "crypto"
     ? cryptoSubTab === "perps" ? "Perps" : "Spot"
@@ -198,6 +220,7 @@ function TradingContent() {
     selectedMarket === "polymarket" ? "polymarket"
     : selectedMarket === "crypto" ? (cryptoSubTab === "perps" ? "perps" : "spot")
     : undefined;
+  // Meme coins — always show aggregated (same as Polymarket pattern)
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -274,10 +297,16 @@ function TradingContent() {
           onSelect={setSelectedMarket}
           polymarketCount={polymarketCount}
           cryptoCount={cryptoCount}
+          memecoinsCount={memecoinsCount}
           cryptoSubTab={cryptoSubTab}
           onCryptoSubTabSelect={setCryptoSubTab}
           spotCount={spotCount}
           perpsCount={perpsCount}
+          mcSubTab={mcSubTab}
+          onMcSubTabSelect={setMcSubTab}
+          mcEdCount={mcEdStrategies.length}
+          mcTrCount={mcTrStrategies.length}
+          mcWcCount={mcWcStrategies.length}
         />
 
         {/* Split Screen */}

@@ -36,4 +36,5 @@ export const api = {
   evolutionTrigger: () => apiFetch<any>("/api/evolution/trigger", "POST"),
   evolutionWallet: (name: string) => apiFetch<any>(`/api/evolution/wallet/${name}`),
   copyTradingStatus: () => apiFetch<any>("/api/copy-trading/status"),
+  memecoinsStatus: () => apiFetch<any>("/api/markets/memecoins"),
 };

@@ -24,6 +24,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Copy Trading", href: "/copy-trading", icon: "copy", section: "MARKETS" },
   { label: "Crypto Spot", href: "/trading?market=crypto&sub=spot", icon: "coin", section: "MARKETS", queryParam: "spot" },
   { label: "Crypto Perps", href: "/trading?market=crypto&sub=perps", icon: "bolt", section: "MARKETS", queryParam: "perps" },
+  { label: "Meme Coins", href: "/trading?market=memecoins", icon: "memecoins", section: "MARKETS", queryParam: "memecoins" },
   // System
   { label: "Settings", href: "#", icon: "gear", section: "SYSTEM" },
   { label: "Logs", href: "#", icon: "list", section: "SYSTEM" },
@@ -87,6 +88,12 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
         </svg>
       );
+    case "memecoins":
+      return (
+        <svg className={cls} fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.82m5.84-2.56a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.82m2.56-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7a6 6 0 005.84-7.381 6 6 0 00-5.84 7.38m-.36-9.78a9.01 9.01 0 00-1.8 3.27M4.5 9.75l-.937-.937M3 12H2.25M4.5 14.25l-.937.937M9.75 4.5l-.937-.937M12 3v-.75m2.25 2.25l.937-.937" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -103,6 +110,7 @@ function isActive(item: NavItem, pathname: string, searchParams: URLSearchParams
     if (item.queryParam === "polymarket") return market === "polymarket";
     if (item.queryParam === "spot") return market === "crypto" && (!sub || sub === "spot");
     if (item.queryParam === "perps") return market === "crypto" && sub === "perps";
+    if (item.queryParam === "memecoins") return market === "memecoins";
     return false;
   }
 

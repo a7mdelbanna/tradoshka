@@ -428,6 +428,7 @@ export default function EvolutionPage() {
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [marketFilter, setMarketFilter] = useState<string>("all");
   const [pmSubFilter, setPmSubFilter] = useState<"all" | "ct" | "ai">("all");
+  const [mcSubFilter, setMcSubFilter] = useState<"all" | "ed" | "tr" | "wc">("all");
 
   const { data: statsRaw } = useQuery({
     queryKey: ["evolution-stats"],
@@ -481,8 +482,23 @@ export default function EvolutionPage() {
   const ctCount = pmStrategies.filter((s) => s.name.includes("-CT-")).length;
   const aiCount = pmStrategies.filter((s) => s.name.includes("-AI-")).length;
 
-  // Apply market filter (+ PM sub-filter) to leaderboard
+  // MC sub-filter counts (filter by name prefix since market field says "crypto")
+  const mcStrategies = leaderboard.filter((s) => s.name?.startsWith("MC-"));
+  const mcEdCount = mcStrategies.filter((s) => s.name?.includes("-ED-")).length;
+  const mcTrCount = mcStrategies.filter((s) => s.name?.includes("-TR-")).length;
+  const mcWcCount = mcStrategies.filter((s) => s.name?.includes("-WC-")).length;
+
+  // Apply market filter (+ PM/MC sub-filter) to leaderboard
   const filteredLeaderboard = leaderboard.filter((s) => {
+    if (marketFilter === "memecoins") {
+      if (!s.name?.startsWith("MC-")) return false;
+      if (mcSubFilter !== "all") {
+        if (mcSubFilter === "ed" && !s.name.includes("-ED-")) return false;
+        if (mcSubFilter === "tr" && !s.name.includes("-TR-")) return false;
+        if (mcSubFilter === "wc" && !s.name.includes("-WC-")) return false;
+      }
+      return true;
+    }
     if (marketFilter !== "all" && s.market !== marketFilter) return false;
     if (marketFilter === "polymarket" && pmSubFilter !== "all") {
       if (pmSubFilter === "ct" && !s.name.includes("-CT-")) return false;
@@ -599,10 +615,14 @@ export default function EvolutionPage() {
 
             {/* Market filter bar */}
             <div className="flex flex-wrap items-center gap-2 mb-4">
-              {(["all", "polymarket", "crypto_spot", "crypto_perps"] as const).map((m) => (
+              {(["all", "polymarket", "crypto_spot", "crypto_perps", "memecoins"] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => { setMarketFilter(m); if (m !== "polymarket") setPmSubFilter("all"); }}
+                  onClick={() => {
+                    setMarketFilter(m);
+                    if (m !== "polymarket") setPmSubFilter("all");
+                    if (m !== "memecoins") setMcSubFilter("all");
+                  }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                     marketFilter === m
                       ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/30"
@@ -615,10 +635,14 @@ export default function EvolutionPage() {
                     ? "Polymarket"
                     : m === "crypto_spot"
                     ? "Crypto Spot"
-                    : "Crypto Perps"}
+                    : m === "crypto_perps"
+                    ? "Crypto Perps"
+                    : "Meme Coins"}
                   <span className="ml-1 opacity-60">
                     {m === "all"
                       ? leaderboard.length
+                      : m === "memecoins"
+                      ? mcStrategies.length
                       : leaderboard.filter((s) => s.market === m).length}
                   </span>
                 </button>
@@ -656,6 +680,52 @@ export default function EvolutionPage() {
                     }`}
                   >
                     AI Niche <span className="ml-1 text-[10px] opacity-60">{aiCount}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* MC sub-tabs — visible only when Meme Coins is selected */}
+              {marketFilter === "memecoins" && (
+                <div className="flex items-center gap-1 ml-4 pl-4 border-l border-slate-700/50">
+                  <button
+                    onClick={() => setMcSubFilter("all")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      mcSubFilter === "all"
+                        ? "bg-pink-400/15 text-pink-300 border border-pink-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    All MC <span className="ml-1 text-[10px] opacity-60">{mcStrategies.length}</span>
+                  </button>
+                  <button
+                    onClick={() => setMcSubFilter("ed")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      mcSubFilter === "ed"
+                        ? "bg-rose-400/15 text-rose-300 border border-rose-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    Early Detection <span className="ml-1 text-[10px] opacity-60">{mcEdCount}</span>
+                  </button>
+                  <button
+                    onClick={() => setMcSubFilter("tr")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      mcSubFilter === "tr"
+                        ? "bg-orange-400/15 text-orange-300 border border-orange-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    Trend Riding <span className="ml-1 text-[10px] opacity-60">{mcTrCount}</span>
+                  </button>
+                  <button
+                    onClick={() => setMcSubFilter("wc")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      mcSubFilter === "wc"
+                        ? "bg-purple-400/15 text-purple-300 border border-purple-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    Whale Copy <span className="ml-1 text-[10px] opacity-60">{mcWcCount}</span>
                   </button>
                 </div>
               )}

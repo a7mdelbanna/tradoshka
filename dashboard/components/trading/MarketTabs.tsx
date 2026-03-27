@@ -7,10 +7,16 @@ interface MarketTabsProps {
   onSelect: (market: string) => void;
   polymarketCount: number;
   cryptoCount: number;
+  memecoinsCount?: number;
   cryptoSubTab?: "spot" | "perps";
   onCryptoSubTabSelect?: (tab: "spot" | "perps") => void;
   spotCount?: number;
   perpsCount?: number;
+  mcSubTab?: "all" | "ed" | "tr" | "wc";
+  onMcSubTabSelect?: (tab: "all" | "ed" | "tr" | "wc") => void;
+  mcEdCount?: number;
+  mcTrCount?: number;
+  mcWcCount?: number;
 }
 
 const TAB_CONFIG: Record<string, { accent: string; glow: string; bg: string; border: string; badge: string }> = {
@@ -35,6 +41,13 @@ const TAB_CONFIG: Record<string, { accent: string; glow: string; bg: string; bor
     border: "border-amber-500/30",
     badge: "bg-amber-400/20 text-amber-400",
   },
+  memecoins: {
+    accent: "text-pink-400",
+    glow: "shadow-[0_0_20px_rgba(244,114,182,0.15)]",
+    bg: "bg-gradient-to-r from-pink-500/15 to-pink-400/5",
+    border: "border-pink-500/30",
+    badge: "bg-pink-400/20 text-pink-400",
+  },
 };
 
 export function MarketTabs({
@@ -42,15 +55,22 @@ export function MarketTabs({
   onSelect,
   polymarketCount,
   cryptoCount,
+  memecoinsCount = 0,
   cryptoSubTab = "spot",
   onCryptoSubTabSelect,
   spotCount = 0,
   perpsCount = 0,
+  mcSubTab = "all",
+  onMcSubTabSelect,
+  mcEdCount = 0,
+  mcTrCount = 0,
+  mcWcCount = 0,
 }: MarketTabsProps) {
   const tabs = [
-    { id: "all", label: "All Markets", count: polymarketCount + cryptoCount, icon: "\u25C9" },
+    { id: "all", label: "All Markets", count: polymarketCount + cryptoCount + memecoinsCount, icon: "\u25C9" },
     { id: "polymarket", label: "Polymarket", count: polymarketCount, icon: "\u2B21" },
     { id: "crypto", label: "Crypto", count: cryptoCount, icon: "\u25C8" },
+    { id: "memecoins", label: "Meme Coins", count: memecoinsCount, icon: "\uD83D\uDE80" },
   ];
 
   return (
@@ -89,7 +109,9 @@ export function MarketTabs({
                     ? "bg-emerald-400"
                     : tab.id === "polymarket"
                       ? "bg-blue-400"
-                      : "bg-amber-400"
+                      : tab.id === "crypto"
+                        ? "bg-amber-400"
+                        : "bg-pink-400"
                 }`}
               />
             )}
@@ -103,6 +125,50 @@ export function MarketTabs({
           spotCount={spotCount}
           perpsCount={perpsCount}
         />
+      )}
+      {selected === "memecoins" && onMcSubTabSelect && (
+        <div className="flex items-center gap-1 ml-4">
+          <button
+            onClick={() => onMcSubTabSelect("all")}
+            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+              mcSubTab === "all"
+                ? "bg-pink-400/15 text-pink-300 border border-pink-400/30"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            All <span className="ml-1 text-[10px] opacity-60">{mcEdCount + mcTrCount + mcWcCount}</span>
+          </button>
+          <button
+            onClick={() => onMcSubTabSelect("ed")}
+            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+              mcSubTab === "ed"
+                ? "bg-rose-400/15 text-rose-300 border border-rose-400/30"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Early Detection <span className="ml-1 text-[10px] opacity-60">{mcEdCount}</span>
+          </button>
+          <button
+            onClick={() => onMcSubTabSelect("tr")}
+            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+              mcSubTab === "tr"
+                ? "bg-orange-400/15 text-orange-300 border border-orange-400/30"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Trend Riding <span className="ml-1 text-[10px] opacity-60">{mcTrCount}</span>
+          </button>
+          <button
+            onClick={() => onMcSubTabSelect("wc")}
+            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+              mcSubTab === "wc"
+                ? "bg-purple-400/15 text-purple-300 border border-purple-400/30"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Whale Copy <span className="ml-1 text-[10px] opacity-60">{mcWcCount}</span>
+          </button>
+        </div>
       )}
     </div>
   );
