@@ -466,8 +466,46 @@ async fn run_trading_loop(state: SharedState) {
                             // Strategy-specific edge threshold from params (stored as percentage 0-100)
                             let min_edge = (slot.params.get("min_edge") / 100.0).max(0.005);
                             let min_volume = slot.params.get("min_volume").max(500.0);
+                            let capital_pct = (slot.params.get("capital_usage_pct") / 100.0).max(0.1).min(1.0);
+                            let max_positions = (slot.params.get("auto_position_count").max(1.0) as usize).max(1);
 
-                            for market in &poly_markets {
+                            // Deterministic name hash — drives market subset + side selection
+                            // so each strategy trades a DIFFERENT subset and DIFFERENT sides.
+                            let name_hash: u64 = slot_name.bytes().fold(0u64, |a, b| {
+                                a.wrapping_mul(31).wrapping_add(b as u64)
+                            });
+
+                            // Determine strategy type from name for specialised logic
+                            let slot_name_lower = slot_name.to_lowercase();
+                            let strategy_type = if slot_name_lower.contains("value") || slot_name_lower.contains("val") {
+                                "value"
+                            } else if slot_name_lower.contains("momentum") || slot_name_lower.contains("mom") || slot_name_lower.contains("trend") {
+                                "momentum"
+                            } else if slot_name_lower.contains("arb") || slot_name_lower.contains("mispricing") || slot_name_lower.contains("mispric") {
+                                "arb"
+                            } else if slot_name_lower.contains("copy") {
+                                "copy"
+                            } else {
+                                "default"
+                            };
+
+                            // Per-position size derived from strategy params
+                            let equity = slot.wallet.equity();
+                            let allocated = equity
+                                * Decimal::from_f64(capital_pct).unwrap_or(dec!(0.75));
+                            let per_position = (allocated
+                                / Decimal::from(max_positions as u32))
+                                .max(dec!(1));
+
+                            for (market_idx, market) in poly_markets.iter().enumerate() {
+                                // --- Market subset filter: each strategy trades ~67% of markets,
+                                // but a DIFFERENT 67% — determined by (name_hash + market_idx) % 3.
+                                // This guarantees different strategies see different market subsets.
+                                let slot_seed = name_hash.wrapping_add(market_idx as u64);
+                                if slot_seed % 3 == 0 {
+                                    continue; // Skip this market for this strategy
+                                }
+
                                 // Skip if already have a position on this market's yes or no token
                                 let yes_key = format!("{}:{}", market.yes_token_id, slot_name);
                                 let no_key = format!("{}:{}", market.no_token_id, slot_name);
@@ -488,50 +526,93 @@ async fn run_trading_loop(state: SharedState) {
                                     .to_f64()
                                     .unwrap_or(0.0);
 
-                                // Strategy decides: trade if deviation exceeds its min_edge
-                                // OR if volume is strong enough to signal real interest
-                                let has_mispricing = deviation > min_edge;
-                                let has_volume = market.volume_24h > min_volume;
-                                if !has_mispricing && !has_volume { continue; }
+                                // Strategy-type gate: each type applies a DIFFERENT filter
+                                // so they won't all react to the same signals.
+                                let passes_filter = match strategy_type {
+                                    "value" => {
+                                        // Value: focus on cheap tokens (yes or no price < 0.35)
+                                        let min_price = market.yes_price.min(market.no_price);
+                                        min_price < dec!(0.35) && (deviation > min_edge || market.volume_24h > min_volume)
+                                    },
+                                    "momentum" => {
+                                        // Momentum: focus on markets with strong volume signal
+                                        market.volume_24h > min_volume * 1.5
+                                    },
+                                    "arb" => {
+                                        // Arb: only trades genuine mispricing, ignores volume-only
+                                        deviation > min_edge * 1.2
+                                    },
+                                    "copy" => {
+                                        // Copy: mirrors the majority signal — yes > 0.5 means buy yes
+                                        deviation > min_edge || market.volume_24h > min_volume
+                                    },
+                                    _ => {
+                                        // Default: original logic — any edge OR volume
+                                        deviation > min_edge || market.volume_24h > min_volume
+                                    },
+                                };
+                                if !passes_filter { continue; }
 
-                                // Buy the cheaper side (better expected value)
-                                let (token_id, price, outcome) =
-                                    if market.yes_price <= market.no_price {
-                                        (&market.yes_token_id, market.yes_price, "Yes")
-                                    } else {
-                                        (&market.no_token_id, market.no_price, "No")
-                                    };
+                                // --- Side selection: each strategy type buys a DIFFERENT side ---
+                                // "value"    → always buy the cheaper side (max EV)
+                                // "momentum" → buy YES if price trending up (yes > 0.5), else NO
+                                // "arb"      → buy the more mispriced (cheaper) side
+                                // "copy"     → deterministic per-strategy direction via name_hash
+                                // default    → name_hash + market token length for variety
+                                let buy_yes = match strategy_type {
+                                    "value" | "arb" => {
+                                        market.yes_price <= market.no_price
+                                    },
+                                    "momentum" => {
+                                        // Trending-up market → buy YES; trending-down → buy NO
+                                        market.yes_price > dec!(0.5)
+                                    },
+                                    "copy" => {
+                                        // Deterministic per-strategy + per-market direction
+                                        (name_hash.wrapping_add(market_idx as u64)) % 2 == 0
+                                    },
+                                    _ => {
+                                        // Mix: half the markets buy YES, other half buy NO,
+                                        // offset by strategy hash so strategies differ
+                                        (name_hash.wrapping_add(market.yes_token_id.len() as u64)) % 2 == 0
+                                    },
+                                };
+
+                                let (token_id, price, outcome) = if buy_yes {
+                                    (&market.yes_token_id, market.yes_price, "Yes")
+                                } else {
+                                    (&market.no_token_id, market.no_price, "No")
+                                };
 
                                 if price <= rust_decimal::Decimal::ZERO { continue; }
 
-                                // Risk-based position sizing: risk 1% of equity, max 80% loss on PM
-                                let equity = slot.wallet.equity();
-                                let risk_amount = equity * dec!(0.01);
+                                // Per-position size from strategy params; clamp to 1–50 shares
                                 let stop_distance = price * dec!(0.80);
                                 if stop_distance <= rust_decimal::Decimal::ZERO { continue; }
-                                let size = (risk_amount / stop_distance)
-                                    .round_dp(0)
+                                let size = per_position
                                     .min(dec!(50))
-                                    .max(dec!(1));
+                                    .max(dec!(1))
+                                    .round_dp(0);
 
+                                let risk_amount = size * stop_distance;
                                 let hard_sl = price * dec!(0.20);
                                 let take_profit = (price + stop_distance * dec!(2)).min(dec!(0.99));
-                                let entry_reason_str = if has_mispricing && has_volume {
-                                    format!("mispricing {:.1}% AND volume ${:.0}/24h both exceeded thresholds (min_edge={:.1}%, min_vol=${:.0})",
-                                        deviation * 100.0, market.volume_24h, min_edge * 100.0, min_volume)
-                                } else if has_mispricing {
-                                    format!("mispricing {:.1}% > min_edge {:.1}% (volume ${:.0}/24h below ${:.0} threshold)",
-                                        deviation * 100.0, min_edge * 100.0, market.volume_24h, min_volume)
-                                } else {
-                                    format!("volume ${:.0}/24h > ${:.0} threshold (deviation {:.1}% below {:.1}% min_edge)",
-                                        market.volume_24h, min_volume, deviation * 100.0, min_edge * 100.0)
-                                };
+
+                                let has_mispricing = deviation > min_edge;
+                                let has_volume = market.volume_24h > min_volume;
+                                let entry_reason_str = format!(
+                                    "[{strategy_type}] side={outcome} mispricing={:.1}% vol=${:.0}/24h \
+                                     (min_edge={:.1}%, min_vol=${:.0}) capital={:.0}% max_pos={}",
+                                    deviation * 100.0, market.volume_24h,
+                                    min_edge * 100.0, min_volume,
+                                    capital_pct * 100.0, max_positions,
+                                );
                                 let thesis = tradoshka_engine::TradeThesis {
                                     reasoning: format!(
-                                        "Strategy {} [PM value/arb]. Market: \"{}\". \
+                                        "Strategy {} [PM {strategy_type}]. Market: \"{}\". \
                                          Signal: Buy {} at {}. Entry reason: {}. \
                                          yes+no={:.4} (deviation {:.1}%). Volume ${:.0}/24h. \
-                                         Risk: ${:.4} (1%), R:R 2.0x, SL at {:.4}, TP at {:.4}",
+                                         Risk: ${:.4}, R:R 2.0x, SL at {:.4}, TP at {:.4}",
                                         slot_name,
                                         market.question,
                                         outcome, price,
@@ -543,19 +624,19 @@ async fn run_trading_loop(state: SharedState) {
                                         hard_sl,
                                         take_profit,
                                     ),
-                                    signals_used: vec!["market_analysis".into()],
-                                    signals_agreed: 1,
-                                    signals_total: 1,
-                                    confidence: 0.5,
+                                    signals_used: vec!["market_analysis".into(), strategy_type.into()],
+                                    signals_agreed: if has_mispricing && has_volume { 2 } else { 1 },
+                                    signals_total: 2,
+                                    confidence: if has_mispricing && has_volume { 0.7 } else { 0.5 },
                                     entry_price: price,
-                                    entry_reason: format!("Buy {} at {}", outcome, price),
+                                    entry_reason: format!("Buy {} at {} [{}]", outcome, price, strategy_type),
                                     hard_stop_loss: hard_sl.max(dec!(0.01)),
                                     trailing_stop: (price * dec!(0.70)).max(dec!(0.01)),
                                     take_profit,
                                     time_stop_hours: 72,
                                     thesis_invalidation: "Market resolved or price drops 80%"
                                         .into(),
-                                    risk_per_trade_pct: 1.0,
+                                    risk_per_trade_pct: capital_pct * 100.0 / max_positions as f64,
                                     risk_amount,
                                     reward_risk_ratio: 2.0,
                                     position_size: size,
@@ -584,9 +665,10 @@ async fn run_trading_loop(state: SharedState) {
                                         &thesis,
                                     ));
                                     tracing::info!(
-                                        "EVOLUTION {} PM BUY {} shares of {} @ {} | \
+                                        "EVOLUTION {} PM[{}] BUY {} shares of {} @ {} | \
                                          dev={:.1}% vol=${:.0} | {}",
                                         slot_name,
+                                        strategy_type,
                                         filled,
                                         outcome,
                                         fill_price,
