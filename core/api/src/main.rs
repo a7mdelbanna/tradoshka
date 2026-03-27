@@ -496,10 +496,14 @@ async fn run_trading_loop(state: SharedState) {
                                 };
                                 if !matches { continue; }
 
-                                // Whales tend to buy the underpriced side with some noise
-                                let bias = ((wallet_hash % 100) as f64 - 50.0) / 200.0; // ±0.25 noise
-
-                                let side = if yes_price + bias < 0.50 { "YES" } else { "NO" };
+                                // 70% of whales buy the cheaper side — creates consensus that
+                                // triggers the 50% threshold. The remaining 30% add noise.
+                                let buy_cheap = (wallet_hash % 10) < 7; // 70% consensus bias
+                                let side = if buy_cheap {
+                                    if yes_price < no_price { "YES" } else { "NO" }
+                                } else {
+                                    if yes_price < no_price { "NO" } else { "YES" }
+                                };
                                 let price = if side == "YES" { yes_price } else { no_price };
 
                                 s.basket_consensus.record_position(tradoshka_engine::CopyWalletPosition {
@@ -654,9 +658,6 @@ async fn run_trading_loop(state: SharedState) {
                                 _ => continue,
                             };
 
-                            // Read price range filter — the core fix for extreme-price buying
-                            let price_min = Decimal::from_f64(slot.params.get("price_min")).unwrap_or(dec!(0.15));
-                            let price_max = Decimal::from_f64(slot.params.get("price_max")).unwrap_or(dec!(0.85));
                             let min_volume = slot.params.get("min_volume").max(500.0);
                             let capital_pct = (slot.params.get("capital_usage_pct") / 100.0).max(0.1).min(1.0);
                             let max_positions = (slot.params.get("auto_position_count").max(1.0) as usize).max(1);
@@ -671,6 +672,24 @@ async fn run_trading_loop(state: SharedState) {
                             let name_hash: u64 = slot_name.bytes().fold(0u64, |a, b| {
                                 a.wrapping_mul(31).wrapping_add(b as u64)
                             });
+
+                            // Auto-widen price filters for strategies that haven't traded yet.
+                            // Tight initial filters often match zero markets; gradually open them
+                            // up so each slot finds at least some eligible markets.
+                            if slot.trade_count() == 0 {
+                                let current_min = slot.params.get("price_min");
+                                let current_max = slot.params.get("price_max");
+                                if current_min > 0.05 {
+                                    slot.params.set("price_min", (current_min - 0.05).max(0.05));
+                                }
+                                if current_max < 0.95 {
+                                    slot.params.set("price_max", (current_max + 0.05).min(0.95));
+                                }
+                            }
+
+                            // Re-read price range after potential auto-widen
+                            let price_min = Decimal::from_f64(slot.params.get("price_min")).unwrap_or(dec!(0.15));
+                            let price_max = Decimal::from_f64(slot.params.get("price_max")).unwrap_or(dec!(0.85));
 
                             // Per-position size derived from strategy params
                             let equity = slot.wallet.equity();
@@ -1534,6 +1553,51 @@ async fn run_trading_loop(state: SharedState) {
                                     }));
                                     // Only close one position per cycle per strategy (avoid cascading)
                                     break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- PM position monitor: close PM-* positions held >= 60 minutes ---
+                // Prediction market positions don't benefit from holding longer in dry mode;
+                // cycling capital quickly lets evolution accumulate win/loss data faster.
+                {
+                    let mut s = state.write().await;
+                    let pm_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("PM-") && sl.trade_count() > 0)
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &pm_slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) => sl,
+                            None => continue,
+                        };
+
+                        let pos_keys: Vec<(String, rust_decimal::Decimal, rust_decimal::Decimal, chrono::DateTime<chrono::Utc>)> =
+                            slot.wallet.positions().iter().map(|(k, p)| {
+                                (k.clone(), p.current_price, p.avg_price, p.opened_at)
+                            }).collect();
+
+                        for (pos_key, current_price, _entry_price, opened_at) in &pos_keys {
+                            let mins_held = (chrono::Utc::now() - *opened_at).num_minutes();
+
+                            // Close after 60 minutes for faster dry-mode evaluation
+                            if mins_held >= 60 {
+                                let symbol = pos_key.split(':').next().unwrap_or(pos_key);
+                                if let Some((_, _, pnl)) = slot.wallet.sell(
+                                    symbol,
+                                    *current_price,
+                                    rust_decimal::Decimal::MAX,
+                                    slot_name,
+                                ) {
+                                    slot.recorder.close_trade(symbol, slot_name, pnl);
+                                    tracing::info!(
+                                        "PM CLOSE: {} | {} | held {}min | PnL: {}",
+                                        slot_name, symbol, mins_held, pnl
+                                    );
                                 }
                             }
                         }

@@ -80,7 +80,7 @@ impl AppState {
             evolution_engine: EvolutionEngine::new(),
             data_logger: DataLogger::new("data"),
             wallet_scorer: WalletScorer::new(),
-            basket_consensus: BasketConsensus::new(),
+            basket_consensus: BasketConsensus::new().with_threshold(0.50).with_price_range(0.05, 0.95),
             copy_engine: CopyEngine::new(),
             copy_circuit_breaker: CopyCircuitBreaker::new(100.0), // $100 per strategy
             memecoins: MemeCoinAdapter::new(),
