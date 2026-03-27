@@ -1140,18 +1140,28 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
-                // Update MC-* strategy wallet prices (use crypto prices as proxy for now)
+                // Update MC-* strategy wallet prices from meme coin scanner
                 {
                     let mut s = state.write().await;
-                    let prices = s.crypto_data.current_prices();
-                    let mc_slot_names: Vec<String> = s.strategy_manager.alive_slots()
-                        .iter()
-                        .filter(|sl| sl.name.starts_with("MC-"))
-                        .map(|sl| sl.name.clone())
+                    // Build price map from tracked meme tokens (address → price as Decimal)
+                    let mc_prices: std::collections::HashMap<String, rust_decimal::Decimal> = s.memecoins.scanner
+                        .tracked_tokens().iter()
+                        .filter_map(|t| {
+                            rust_decimal::Decimal::from_f64(t.price_usd)
+                                .map(|p| (t.address.clone(), p))
+                        })
                         .collect();
-                    for name in &mc_slot_names {
-                        if let Some(slot) = s.strategy_manager.get_mut(name) {
-                            slot.wallet.update_prices(&prices);
+
+                    if !mc_prices.is_empty() {
+                        let mc_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                            .iter()
+                            .filter(|sl| sl.name.starts_with("MC-"))
+                            .map(|sl| sl.name.clone())
+                            .collect();
+                        for name in &mc_slot_names {
+                            if let Some(slot) = s.strategy_manager.get_mut(name) {
+                                slot.wallet.update_prices(&mc_prices);
+                            }
                         }
                     }
                 }
