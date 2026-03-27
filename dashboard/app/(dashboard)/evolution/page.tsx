@@ -427,6 +427,7 @@ export default function EvolutionPage() {
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [marketFilter, setMarketFilter] = useState<string>("all");
+  const [pmSubFilter, setPmSubFilter] = useState<"all" | "ct" | "ai">("all");
 
   const { data: statsRaw } = useQuery({
     queryKey: ["evolution-stats"],
@@ -475,10 +476,20 @@ export default function EvolutionPage() {
       ? graveyardRaw.strategies
       : PLACEHOLDER_GRAVEYARD;
 
-  // Apply market filter to leaderboard
-  const filteredLeaderboard = marketFilter === "all"
-    ? leaderboard
-    : leaderboard.filter((s) => s.market === marketFilter);
+  // PM sub-filter counts
+  const pmStrategies = leaderboard.filter((s) => s.market === "polymarket");
+  const ctCount = pmStrategies.filter((s) => s.name.includes("-CT-")).length;
+  const aiCount = pmStrategies.filter((s) => s.name.includes("-AI-")).length;
+
+  // Apply market filter (+ PM sub-filter) to leaderboard
+  const filteredLeaderboard = leaderboard.filter((s) => {
+    if (marketFilter !== "all" && s.market !== marketFilter) return false;
+    if (marketFilter === "polymarket" && pmSubFilter !== "all") {
+      if (pmSubFilter === "ct" && !s.name.includes("-CT-")) return false;
+      if (pmSubFilter === "ai" && !s.name.includes("-AI-")) return false;
+    }
+    return true;
+  });
 
   const handleTrigger = async () => {
     setTriggerLoading(true);
@@ -587,11 +598,11 @@ export default function EvolutionPage() {
             </div>
 
             {/* Market filter bar */}
-            <div className="flex gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
               {(["all", "polymarket", "crypto_spot", "crypto_perps"] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => setMarketFilter(m)}
+                  onClick={() => { setMarketFilter(m); if (m !== "polymarket") setPmSubFilter("all"); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                     marketFilter === m
                       ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/30"
@@ -612,6 +623,42 @@ export default function EvolutionPage() {
                   </span>
                 </button>
               ))}
+
+              {/* PM sub-tabs — visible only when Polymarket is selected */}
+              {marketFilter === "polymarket" && (
+                <div className="flex items-center gap-1 ml-4 pl-4 border-l border-slate-700/50">
+                  <button
+                    onClick={() => setPmSubFilter("all")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      pmSubFilter === "all"
+                        ? "bg-blue-400/15 text-blue-300 border border-blue-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    All PM <span className="ml-1 text-[10px] opacity-60">{pmStrategies.length}</span>
+                  </button>
+                  <button
+                    onClick={() => setPmSubFilter("ct")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      pmSubFilter === "ct"
+                        ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    Copy Trading <span className="ml-1 text-[10px] opacity-60">{ctCount}</span>
+                  </button>
+                  <button
+                    onClick={() => setPmSubFilter("ai")}
+                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
+                      pmSubFilter === "ai"
+                        ? "bg-purple-400/15 text-purple-300 border border-purple-400/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    AI Niche <span className="ml-1 text-[10px] opacity-60">{aiCount}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <LeaderboardTable rows={filteredLeaderboard} totalAlive={stats.alive_count || filteredLeaderboard.length} />
