@@ -240,6 +240,8 @@ impl StrategyWalletManager {
                 "polymarket"
             } else if name.starts_with("CS-") {
                 "crypto_spot"
+            } else if name.starts_with("MC-") {
+                "meme_coins"
             } else {
                 "crypto_perps"
             };
