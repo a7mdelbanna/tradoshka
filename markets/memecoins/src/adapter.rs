@@ -6,11 +6,13 @@ use tradoshka_common::error::Result;
 use crate::token_scanner::TokenScanner;
 use crate::safety::SafetyFilter;
 use crate::whale_tracker::MemeWhaleTracker;
+use crate::volume_tracker::VolumeTracker;
 
 pub struct MemeCoinAdapter {
     pub scanner: TokenScanner,
     pub safety: SafetyFilter,
     pub whale_tracker: MemeWhaleTracker,
+    pub volume_tracker: VolumeTracker,
     connected: bool,
 }
 
@@ -20,6 +22,7 @@ impl MemeCoinAdapter {
             scanner: TokenScanner::new(),
             safety: SafetyFilter::new(),
             whale_tracker: MemeWhaleTracker::new(),
+            volume_tracker: VolumeTracker::new(),
             connected: false,
         }
     }

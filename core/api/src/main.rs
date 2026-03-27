@@ -1022,6 +1022,14 @@ async fn run_trading_loop(state: SharedState) {
                         s.memecoins.scanner.scan_trending().await
                     };
 
+                    // Update volume tracker for all scanned tokens
+                    {
+                        let mut s = state.write().await;
+                        for token in &tokens {
+                            s.memecoins.volume_tracker.update(&token.address, token.volume_5m, 0);
+                        }
+                    }
+
                     // Phase 2: pre-compute safety scores and whale consensus (read-only from memecoins)
                     // This avoids the borrow conflict when we later mutably borrow strategy_manager.
                     let token_meta: Vec<(u32, usize)> = {
@@ -1055,6 +1063,18 @@ async fn run_trading_loop(state: SharedState) {
                         let max_positions = slot.params.get("auto_position_count").max(1.0) as usize;
                         let strategy_type = slot.params.strategy_type.clone();
 
+                        // V2 strategy-specific params
+                        let min_volume_5m = if strategy_type == "mc_trend_v2" {
+                            slot.params.get("min_volume_5m").max(5000.0)
+                        } else { 500.0 };
+                        let max_mcap_v2 = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                            let v = slot.params.get("max_mcap");
+                            if v > 0.0 { v } else { 500000.0 }
+                        } else { 0.0 };
+                        let min_buy_sell_ratio = if strategy_type == "mc_trend_v2" {
+                            slot.params.get("min_buy_sell_ratio").max(1.0)
+                        } else { 0.0 };
+
                         for (token, (safety_score, whale_consensus)) in tokens.iter().zip(token_meta.iter()) {
                             if slot.wallet.open_position_count() >= max_positions { break; }
 
@@ -1069,13 +1089,30 @@ async fn run_trading_loop(state: SharedState) {
                                 "mc_snipe" => token.is_new() || token.volume_surge(),
                                 "mc_trend" => token.price_change_1h > 10.0 || token.volume_surge(),
                                 "mc_whale" => *whale_consensus >= 2 || token.volume_24h > 50000.0,
+                                // V2: real entry criteria
+                                "mc_trend_v2" => {
+                                    token.volume_5m >= min_volume_5m           // V2: real volume threshold
+                                    && token.price_change_5m > 0.0             // price still going up
+                                    && token.price_change_5m >= min_buy_sell_ratio // buy pressure proxy
+                                    && (max_mcap_v2 <= 0.0 || token.market_cap <= max_mcap_v2)
+                                },
+                                "mc_copy_v2" => {
+                                    *whale_consensus >= 1
+                                    && token.volume_5m >= 5000.0
+                                    && (max_mcap_v2 <= 0.0 || token.market_cap <= max_mcap_v2)
+                                },
                                 _ => token.volume_24h > 10000.0,
                             };
 
                             if !should_trade { continue; }
 
-                            // Volume confirmation: skip low-volume tokens
-                            if token.volume_5m < 500.0 { continue; } // Need >$500 in 5-min vol
+                            // V2: minimum $5K volume threshold for new strategy types
+                            let vol_floor = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                                5000.0
+                            } else {
+                                500.0
+                            };
+                            if token.volume_5m < vol_floor { continue; }
 
                             // Min liquidity: only buy into deep enough markets
                             if token.liquidity_usd < 10000.0 { continue; } // >$10K liquidity
@@ -1089,12 +1126,19 @@ async fn run_trading_loop(state: SharedState) {
                                 if max_mcap > 0.0 && token.market_cap > max_mcap { continue; }
                             }
 
-                            // Calculate position size — capped at $5 max per meme coin trade
+                            // Calculate position size — $10-20 for V2, $5 max for legacy
                             let equity = slot.wallet.equity();
-                            let per_position = (equity
-                                * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
-                                / rust_decimal::Decimal::from(max_positions as u32))
-                                .min(rust_decimal_macros::dec!(5)); // Max $5 per meme coin position
+                            let per_position = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                                (equity
+                                    * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.50))
+                                    / rust_decimal::Decimal::from(max_positions as u32))
+                                    .min(rust_decimal_macros::dec!(20)) // V2: $10-20 per position
+                            } else {
+                                (equity
+                                    * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
+                                    / rust_decimal::Decimal::from(max_positions as u32))
+                                    .min(rust_decimal_macros::dec!(5)) // Legacy: max $5 per meme coin position
+                            };
                             let price = rust_decimal::Decimal::from_f64(token.price_usd).unwrap_or(rust_decimal_macros::dec!(0));
                             if price <= rust_decimal::Decimal::ZERO { continue; }
                             let size = (per_position / price).round_dp(0);
@@ -1109,14 +1153,26 @@ async fn run_trading_loop(state: SharedState) {
                                 size,
                                 slot_name,
                             ) {
-                                let hard_stop = price * rust_decimal_macros::dec!(0.85); // -15% stop (was -30%)
+                                // V2: hard stop at -50%, legacy: -15%
+                                let hard_stop_pct = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                                    let h = slot.params.get("hard_stop_pct");
+                                    if h > 0.0 { h } else { 50.0 }
+                                } else { 15.0 };
+                                let hard_stop_factor = rust_decimal::Decimal::from_f64(1.0 - hard_stop_pct / 100.0)
+                                    .unwrap_or(rust_decimal_macros::dec!(0.85));
+                                let hard_stop = price * hard_stop_factor;
                                 let take_profit = price
                                     * rust_decimal::Decimal::from_f64(target_mult)
                                         .unwrap_or(rust_decimal_macros::dec!(2));
 
-                                // Time stop: shorter for meme coins — they move fast
-                                let time_hours = match strategy_type.as_str() {
-                                    "mc_snipe" => 0, // position monitor handles snipe exits in minutes
+                                // Time stop: V2 uses time_limit_mins param
+                                let time_hours: u32 = match strategy_type.as_str() {
+                                    "mc_trend_v2" => {
+                                        let mins = slot.params.get("time_limit_mins");
+                                        if mins > 0.0 { (mins / 60.0).ceil() as u32 } else { 2 }
+                                    },
+                                    "mc_copy_v2" => 1,
+                                    "mc_snipe" => 0,
                                     "mc_trend" => 1,
                                     "mc_whale" => 1,
                                     _ => 1,
@@ -1134,23 +1190,23 @@ async fn run_trading_loop(state: SharedState) {
                                     slot_name,
                                     &tradoshka_engine::TradeThesis {
                                         reasoning: format!(
-                                            "MEME COIN: {} ({}) on Solana. Safety: {}/100. \
-                                             MCap: ${:.0}. Vol24h: ${:.0}. Change1h: {:.1}%. Strategy: {}",
+                                            "MEME COIN V2: {} ({}) on Solana. Safety: {}/100. \
+                                             MCap: ${:.0}. Vol5m: ${:.0}. Change5m: {:.1}%. Strategy: {}",
                                             token.symbol, token.name, safety_score,
-                                            token.market_cap, token.volume_24h,
-                                            token.price_change_1h, slot_name
+                                            token.market_cap, token.volume_5m,
+                                            token.price_change_5m, slot_name
                                         ),
-                                        signals_used: vec!["safety_check".into(), "volume_analysis".into()],
-                                        signals_agreed: 2,
-                                        signals_total: 2,
+                                        signals_used: vec!["safety_check".into(), "volume_5m".into(), "buy_pressure".into()],
+                                        signals_agreed: 3,
+                                        signals_total: 3,
                                         confidence: (*safety_score as f64) / 100.0,
                                         entry_price: price,
                                         entry_reason: format!("{} at ${}", token.symbol, token.price_usd),
                                         hard_stop_loss: hard_stop,
-                                        trailing_stop: price * rust_decimal_macros::dec!(0.90), // 10% trailing (tighter)
+                                        trailing_stop: price * rust_decimal_macros::dec!(0.90),
                                         take_profit,
                                         time_stop_hours: time_hours,
-                                        thesis_invalidation: "Safety score drops or volume dies".into(),
+                                        thesis_invalidation: "Volume cliff or holder stalling — V2 exit system".into(),
                                         risk_per_trade_pct: 1.0,
                                         risk_amount: per_position,
                                         reward_risk_ratio: target_mult,
@@ -1163,21 +1219,21 @@ async fn run_trading_loop(state: SharedState) {
                                 // SAFETY: data_logger is a disjoint field from strategy_manager.
                                 unsafe {
                                     (*data_logger).log_trade(&serde_json::json!({
-                                        "type": "MEME_COIN",
+                                        "type": "MEME_COIN_V2",
                                         "strategy": slot_name,
                                         "token": token.symbol,
                                         "address": token.address,
                                         "price": token.price_usd,
                                         "safety_score": safety_score,
                                         "mcap": token.market_cap,
-                                        "volume_24h": token.volume_24h,
+                                        "volume_5m": token.volume_5m,
                                     }));
                                 }
 
                                 tracing::info!(
-                                    "MEME {} BUY {} {} @ {} | safety={}/100 vol24h=${:.0} mcap=${:.0} | {}",
+                                    "MC V2 {} BUY {} {} @ {} | safety={}/100 vol5m=${:.0} mcap=${:.0} | {}",
                                     slot_name, filled, token.symbol, fill_price,
-                                    safety_score, token.volume_24h, token.market_cap,
+                                    safety_score, token.volume_5m, token.market_cap,
                                     token.name.chars().take(30).collect::<String>()
                                 );
                             }
@@ -1211,9 +1267,13 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
-                // Position monitor for MC-* strategy wallets — tighter stops for meme coins
+                // V2 MC Position Monitor
                 {
                     let mut s = state.write().await;
+                    // SAFETY: volume_tracker and strategy_manager are disjoint fields of AppState.
+                    let volume_tracker: *const tradoshka_memecoins::volume_tracker::VolumeTracker =
+                        &s.memecoins.volume_tracker;
+
                     let mc_slot_names: Vec<String> = s.strategy_manager.alive_slots()
                         .iter()
                         .filter(|sl| sl.name.starts_with("MC-") && sl.trade_count() > 0)
@@ -1226,12 +1286,21 @@ async fn run_trading_loop(state: SharedState) {
                             None => continue,
                         };
 
-                        let pos_keys: Vec<(String, rust_decimal::Decimal, rust_decimal::Decimal, chrono::DateTime<chrono::Utc>)> =
-                            slot.wallet.positions().iter().map(|(k, p)| {
-                                (k.clone(), p.current_price, p.avg_price, p.opened_at)
-                            }).collect();
+                        let strategy_type = slot.params.strategy_type.clone();
+                        let hard_stop_pct = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                            let h = slot.params.get("hard_stop_pct");
+                            if h > 0.0 { h } else { 50.0 }
+                        } else { 15.0 };
+                        let time_limit_mins: i64 = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                            let t = slot.params.get("time_limit_mins");
+                            if t > 0.0 { t as i64 } else { 120 }
+                        } else { 60 };
 
-                        for (pos_key, current_price, entry_price, opened_at) in &pos_keys {
+                        let pos_data: Vec<_> = slot.wallet.positions().iter().map(|(k, p)| {
+                            (k.clone(), p.current_price, p.avg_price, p.opened_at, p.token_id.clone())
+                        }).collect();
+
+                        for (pos_key, current_price, entry_price, opened_at, token_id) in &pos_data {
                             if *entry_price <= rust_decimal::Decimal::ZERO { continue; }
 
                             let pnl_pct = ((*current_price - *entry_price) / *entry_price
@@ -1239,28 +1308,48 @@ async fn run_trading_loop(state: SharedState) {
                                 .to_f64().unwrap_or(0.0);
                             let mins_held = (chrono::Utc::now() - *opened_at).num_minutes();
 
-                            let should_close =
-                                pnl_pct <= -15.0 ||                             // Hard stop: -15%
-                                (mins_held >= 15 && pnl_pct < 5.0) ||          // Time stop: 15 min with <5% gain
-                                (pnl_pct >= 100.0) ||                           // Take profit: 2x
-                                (mins_held >= 60);                              // Absolute max hold: 1 hour
+                            // V2 Exit Logic
+                            let (should_close, reason) = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                                // 1. Volume cliff (primary exit) — safe: disjoint field from strategy_manager
+                                let vol_exit = unsafe { (*volume_tracker).should_exit(token_id) };
+                                if let Some(exit_reason) = vol_exit {
+                                    (true, format!("VOLUME EXIT: {}", exit_reason))
+                                }
+                                // 2. Hard stop (-50% default, configurable)
+                                else if pnl_pct <= -(hard_stop_pct) {
+                                    (true, format!("HARD STOP: {:.0}% loss", pnl_pct))
+                                }
+                                // 3. Time limit
+                                else if time_limit_mins > 0 && mins_held >= time_limit_mins {
+                                    (true, format!("TIME LIMIT: {}min", mins_held))
+                                }
+                                // 4. Profit ladder: sell at 2x
+                                else if pnl_pct >= 100.0 {
+                                    (true, format!("PROFIT LADDER: 2x reached ({:.0}%)", pnl_pct))
+                                }
+                                else { (false, String::new()) }
+                            } else {
+                                // Legacy exit logic for non-V2 strategies
+                                let close = pnl_pct <= -15.0
+                                    || (mins_held >= 15 && pnl_pct < 5.0)
+                                    || pnl_pct >= 100.0
+                                    || mins_held >= 60;
+                                let rsn = if pnl_pct <= -15.0 { "hard stop -15%".to_string() }
+                                    else if mins_held >= 60 { "max time 60min".to_string() }
+                                    else if pnl_pct >= 100.0 { "take profit 2x".to_string() }
+                                    else { "time stop 15min".to_string() };
+                                (close, rsn)
+                            };
 
                             if should_close {
-                                // pos_key is "token_address:strategy_id" — extract token address
-                                let token_address = pos_key.split(':').next().unwrap_or(pos_key.as_str());
+                                let symbol = pos_key.split(':').next().unwrap_or(pos_key.as_str());
                                 if let Some((_, _, pnl)) = slot.wallet.sell(
-                                    token_address, *current_price,
+                                    symbol, *current_price,
                                     rust_decimal::Decimal::MAX, slot_name,
                                 ) {
-                                    slot.recorder.close_trade(token_address, slot_name, pnl);
-                                    let reason = if pnl_pct <= -15.0 { "hard stop -15%" }
-                                        else if mins_held >= 60 { "max time 60min" }
-                                        else if pnl_pct >= 100.0 { "take profit 2x" }
-                                        else { "time stop 15min" };
-                                    tracing::info!(
-                                        "MC STOP: {} | {} | {} | PnL: {:.1}% | held {}min",
-                                        slot_name, token_address, reason, pnl_pct, mins_held
-                                    );
+                                    slot.recorder.close_trade(symbol, slot_name, pnl);
+                                    tracing::info!("MC V2 EXIT: {} | {} | {} | PnL: {:.1}% | held {}min",
+                                        slot_name, symbol, reason, pnl_pct, mins_held);
                                 }
                             }
                         }

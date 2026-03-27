@@ -5,3 +5,4 @@ pub mod token_scanner;
 pub mod safety;
 pub mod whale_tracker;
 pub mod adapter;
+pub mod volume_tracker;
