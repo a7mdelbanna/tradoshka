@@ -665,3 +665,23 @@ pub async fn get_trades_by_market(
         "total": recorder.total_trade_count(),
     }))
 }
+
+// ---------------------------------------------------------------------------
+// Copy Trading
+// ---------------------------------------------------------------------------
+
+pub async fn get_copy_trading_status(
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    let scorer = &state.wallet_scorer;
+    let consensus = &state.basket_consensus;
+    Json(serde_json::json!({
+        "tracked_wallets": scorer.wallet_count(),
+        "qualified_wallets": scorer.qualified_count(),
+        "baskets": consensus.basket_count(),
+        "recent_positions": consensus.recent_positions().len(),
+        "circuit_breaker_halted": state.copy_circuit_breaker.is_halted(),
+        "consecutive_losses": state.copy_circuit_breaker.consecutive_losses(),
+    }))
+}

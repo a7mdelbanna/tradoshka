@@ -441,9 +441,195 @@ async fn run_trading_loop(state: SharedState) {
                 }
 
                 // --- Strategy evolution trading: route Polymarket trades to PM-* wallets ---
-                // Group A (PM-CT-*): Copy Trading — filters by price range + trader metrics
+                // Group A (PM-CT-*): Copy Trading — uses wallet scorer + basket consensus + AI verification
                 // Group B (PM-AI-*): AI/Niche Prediction — matches market question to niche keyword
                 // CRITICAL: NEVER buy tokens below price_min or above price_max (avoids $0.003/$0.995)
+
+                // Group A: PM-CT-* copy trading via the copy trading engine
+                // Pre-fetch markets under a read lock so we don't hold a borrow into s.market_data.
+                let ct_poly_markets: Vec<_> = {
+                    let s = state.read().await;
+                    s.market_data.tracked_markets().into_iter().cloned().collect()
+                };
+                {
+                    let mut s = state.write().await;
+                    let poly_markets = &ct_poly_markets;
+                    // Raw pointers to logger and circuit breaker so we can call them while slot
+                    // (from strategy_manager) is mutably borrowed.
+                    // SAFETY: data_logger and copy_circuit_breaker are disjoint fields from
+                    // strategy_manager, copy_engine, wallet_scorer, and basket_consensus.
+                    let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
+                    let circuit_breaker: *mut tradoshka_engine::CopyCircuitBreaker = &mut s.copy_circuit_breaker;
+
+                    // Simulate whale positions based on market data
+                    // (In production, this would come from real-time API polling)
+                    // Collect wallet data first to avoid borrow conflict with basket_consensus.
+                    let qualified_snapshot: Vec<(String, String, f64, u64)> = s.wallet_scorer
+                        .qualified_wallets()
+                        .iter()
+                        .map(|w| {
+                            let hash = w.address.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+                            (w.address.clone(), w.niche.clone(), w.avg_trade_size, hash)
+                        })
+                        .collect();
+
+                    for market in poly_markets.iter() {
+                        let yes_price = market.yes_price.to_f64().unwrap_or(0.5);
+                        let no_price = market.no_price.to_f64().unwrap_or(0.5);
+
+                        // Simulate some whales taking positions based on market dynamics
+                        // Use volume as a proxy for whale activity
+                        if market.volume_24h > 5000.0 {
+                            let q = market.question.to_lowercase();
+
+                            for (addr, niche, avg_trade_size, wallet_hash) in &qualified_snapshot {
+                                // Filter by niche
+                                let matches = match niche.as_str() {
+                                    "sports" => q.contains("win") && (q.contains("nba") || q.contains("world cup") || q.contains("finals")),
+                                    "politics" => q.contains("president") || q.contains("election") || q.contains("trump"),
+                                    "crypto" => q.contains("bitcoin") || q.contains("btc") || q.contains("crypto"),
+                                    _ => true, // general matches all
+                                };
+                                if !matches { continue; }
+
+                                // Whales tend to buy the underpriced side with some noise
+                                let bias = ((wallet_hash % 100) as f64 - 50.0) / 200.0; // ±0.25 noise
+
+                                let side = if yes_price + bias < 0.50 { "YES" } else { "NO" };
+                                let price = if side == "YES" { yes_price } else { no_price };
+
+                                s.basket_consensus.record_position(tradoshka_engine::CopyWalletPosition {
+                                    wallet_address: addr.clone(),
+                                    market_id: market.condition_id.clone(),
+                                    side: side.into(),
+                                    price,
+                                    size: *avg_trade_size,
+                                    timestamp: chrono::Utc::now(),
+                                });
+                            }
+                        }
+                    }
+
+                    // Now check consensus and execute copy trades for PM-CT-* strategies
+                    let ct_slots: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("PM-CT-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for market in poly_markets.iter() {
+                        let yes_price = market.yes_price.to_f64().unwrap_or(0.5);
+
+                        let consensus_results = s.basket_consensus.check_consensus(
+                            &market.condition_id,
+                            &market.question,
+                            yes_price,
+                        );
+
+                        for consensus in &consensus_results {
+                            if !consensus.triggered { continue; }
+
+                            // AI verification: use a simple probability estimate
+                            // (In production, this would use the MiroFish predictor)
+                            let ai_prob = 0.50 + (market.volume_24h / 100000.0).min(0.15); // Volume = confidence proxy
+
+                            let decision = s.copy_engine.evaluate(consensus, ai_prob, 100.0);
+
+                            if !decision.should_execute { continue; }
+
+                            // Execute for each PM-CT-* strategy
+                            for slot_name in &ct_slots {
+                                let slot = match s.strategy_manager.get_mut(slot_name) {
+                                    Some(sl) if sl.is_alive() => sl,
+                                    _ => continue,
+                                };
+
+                                // Check if already has position in this market (yes or no token)
+                                let yes_key = format!("{}:{}", market.yes_token_id, slot_name);
+                                let no_key = format!("{}:{}", market.no_token_id, slot_name);
+                                if slot.wallet.positions().contains_key(&yes_key) || slot.wallet.positions().contains_key(&no_key) { continue; }
+
+                                // Price range check from strategy params (values stored as fractions, e.g. 0.20)
+                                let price_min = slot.params.get("price_min");
+                                let price_max = slot.params.get("price_max");
+                                let trade_price = if decision.side == "YES" { market.yes_price } else { market.no_price };
+                                let tp = trade_price.to_f64().unwrap_or(0.5);
+
+                                if tp < price_min || tp > price_max { continue; }
+
+                                // Circuit breaker check (use raw pointer — slot is live from strategy_manager)
+                                // SAFETY: copy_circuit_breaker is a disjoint field from strategy_manager.
+                                let breaker = unsafe {
+                                    (*circuit_breaker).check(
+                                        decision.position_size, &consensus.basket_name, &market.condition_id, 500.0,
+                                    )
+                                };
+                                if breaker.size_multiplier == 0.0 { continue; }
+
+                                let size = rust_decimal::Decimal::from_f64(decision.position_size * breaker.size_multiplier)
+                                    .unwrap_or(rust_decimal_macros::dec!(1));
+                                let token_id = if decision.side == "YES" { &market.yes_token_id } else { &market.no_token_id };
+
+                                if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                    token_id, &market.question, &decision.side,
+                                    trade_price, size, slot_name,
+                                ) {
+                                    slot.recorder.record(make_trade_record(
+                                        token_id, &market.question, &decision.side,
+                                        tradoshka_common::types::OrderSide::Buy,
+                                        tradoshka_common::types::Market::Polymarket,
+                                        filled, fill_price, fee, slot_name,
+                                        &tradoshka_engine::TradeThesis {
+                                            reasoning: format!("COPY TRADE: {}", decision.reasoning),
+                                            signals_used: vec!["basket_consensus".into(), "ai_verification".into()],
+                                            signals_agreed: 2,
+                                            signals_total: 2,
+                                            confidence: decision.consensus_pct,
+                                            entry_price: trade_price,
+                                            entry_reason: format!("Consensus {:.0}% + AI {:?}", consensus.consensus_pct * 100.0, decision.ai_verdict),
+                                            hard_stop_loss: trade_price * rust_decimal_macros::dec!(0.70),
+                                            trailing_stop: trade_price * rust_decimal_macros::dec!(0.85),
+                                            take_profit: (trade_price + (trade_price - trade_price * rust_decimal_macros::dec!(0.70)) * rust_decimal_macros::dec!(2)).min(rust_decimal_macros::dec!(0.99)),
+                                            time_stop_hours: 72,
+                                            thesis_invalidation: "Consensus drops below 60% or AI disagrees".into(),
+                                            risk_per_trade_pct: 1.0,
+                                            risk_amount: rust_decimal_macros::dec!(1),
+                                            reward_risk_ratio: 2.0,
+                                            position_size: size,
+                                            max_loss: rust_decimal_macros::dec!(1),
+                                            strategy_tier: "Unproven".into(),
+                                        },
+                                    ));
+
+                                    tracing::info!(
+                                        "COPY TRADE {} PM-CT BUY {} {} @ {} | consensus={:.0}% AI={:?} edge={:.1}% | {}",
+                                        slot_name, filled, decision.side, fill_price,
+                                        decision.consensus_pct * 100.0, decision.ai_verdict,
+                                        decision.ai_edge * 100.0,
+                                        market.question.chars().take(50).collect::<String>(),
+                                    );
+
+                                    // Log to data logger (use raw pointer — slot is still borrowed)
+                                    // SAFETY: data_logger is a disjoint field from strategy_manager.
+                                    unsafe {
+                                        (*data_logger).log_trade(&serde_json::json!({
+                                            "type": "COPY_TRADE",
+                                            "strategy": slot_name,
+                                            "market": market.question,
+                                            "side": decision.side,
+                                            "consensus_pct": decision.consensus_pct,
+                                            "ai_verdict": format!("{:?}", decision.ai_verdict),
+                                            "ai_edge": decision.ai_edge,
+                                            "size": size.to_string(),
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Group B: PM-AI-* and remaining PM-* strategies via generic logic
                 {
                     let poly_markets: Vec<_> = {
                         let s = state.read().await;
@@ -454,7 +640,7 @@ async fn run_trading_loop(state: SharedState) {
                         let mut s = state.write().await;
                         let pm_slot_names: Vec<String> = s.strategy_manager.alive_slots()
                             .iter()
-                            .filter(|sl| sl.name.starts_with("PM-"))
+                            .filter(|sl| sl.name.starts_with("PM-") && !sl.name.starts_with("PM-CT-"))
                             .map(|sl| sl.name.clone())
                             .collect();
 
@@ -1189,6 +1375,51 @@ async fn main() -> anyhow::Result<()> {
         let mut s = state.write().await;
         s.polymarket = Some(tradoshka_polymarket::adapter::PolymarketAdapter::new_public());
         s.crypto = Some(tradoshka_crypto::adapter::CryptoAdapter::new_public());
+    }
+
+    // Seed copy trading with simulated top traders
+    {
+        let mut s = state.write().await;
+        // Simulate 20 top Polymarket wallets across niches
+        let wallets = vec![
+            ("0xwhale_pol_1", 0.82, 0.35, 45u32, 8500.0, 800.0, 12.0, 0.04, 0.15, 2.0, 120u32, "politics"),
+            ("0xwhale_pol_2", 0.75, 0.28, 60u32, 6200.0, 600.0, 18.0, 0.06, 0.12, 5.0, 90u32, "politics"),
+            ("0xwhale_pol_3", 0.70, 0.22, 35u32, 4000.0, 500.0, 10.0, 0.05, 0.10, 3.0, 80u32, "politics"),
+            ("0xwhale_sport_1", 0.88, 0.45, 30u32, 12000.0, 1200.0, 8.0, 0.03, 0.20, 1.0, 150u32, "sports"),
+            ("0xwhale_sport_2", 0.72, 0.25, 50u32, 5500.0, 550.0, 15.0, 0.05, 0.11, 4.0, 100u32, "sports"),
+            ("0xwhale_sport_3", 0.68, 0.18, 40u32, 3500.0, 400.0, 12.0, 0.07, 0.09, 7.0, 70u32, "sports"),
+            ("0xwhale_crypto_1", 0.80, 0.40, 25u32, 10000.0, 1000.0, 7.0, 0.04, 0.18, 2.0, 130u32, "crypto"),
+            ("0xwhale_crypto_2", 0.73, 0.30, 55u32, 7000.0, 700.0, 16.0, 0.05, 0.13, 3.0, 95u32, "crypto"),
+            ("0xwhale_crypto_3", 0.65, 0.15, 30u32, 2500.0, 350.0, 9.0, 0.08, 0.07, 10.0, 60u32, "crypto"),
+            ("0xwhale_gen_1", 0.78, 0.32, 70u32, 9000.0, 900.0, 20.0, 0.04, 0.14, 1.0, 140u32, "general"),
+            ("0xwhale_gen_2", 0.71, 0.20, 45u32, 4500.0, 500.0, 13.0, 0.06, 0.10, 6.0, 85u32, "general"),
+            ("0xwhale_gen_3", 0.66, 0.16, 35u32, 3000.0, 400.0, 10.0, 0.07, 0.08, 8.0, 65u32, "general"),
+            ("0xwhale_pol_4", 0.76, 0.26, 55u32, 5800.0, 580.0, 16.0, 0.05, 0.11, 4.0, 105u32, "politics"),
+            ("0xwhale_sport_4", 0.74, 0.24, 42u32, 5000.0, 520.0, 12.0, 0.06, 0.10, 5.0, 88u32, "sports"),
+            ("0xwhale_crypto_4", 0.69, 0.19, 38u32, 3800.0, 420.0, 11.0, 0.06, 0.09, 6.0, 75u32, "crypto"),
+            ("0xwhale_gen_4", 0.77, 0.29, 48u32, 6500.0, 650.0, 14.0, 0.05, 0.12, 3.0, 110u32, "general"),
+            ("0xwhale_gen_5", 0.70, 0.21, 52u32, 4800.0, 480.0, 15.0, 0.06, 0.10, 5.0, 92u32, "general"),
+            ("0xwhale_pol_5", 0.79, 0.31, 38u32, 7500.0, 750.0, 11.0, 0.04, 0.14, 2.0, 115u32, "politics"),
+            ("0xwhale_sport_5", 0.73, 0.23, 44u32, 5200.0, 540.0, 13.0, 0.05, 0.10, 4.0, 93u32, "sports"),
+            ("0xwhale_crypto_5", 0.67, 0.17, 32u32, 3200.0, 380.0, 9.0, 0.07, 0.08, 9.0, 68u32, "crypto"),
+        ];
+
+        for (addr, wr, roi, trades, pnl, avg_size, tpm, std, mean, days_win, days_active, niche) in wallets {
+            s.wallet_scorer.score_wallet(
+                addr, wr, roi, trades, pnl, avg_size, tpm,
+                std, mean, days_win, days_active, false, 0.08, niche,
+            );
+        }
+
+        // Build baskets from qualified wallets
+        let qualified: Vec<_> = s.wallet_scorer.qualified_wallets().iter().map(|w| (*w).clone()).collect();
+        let refs: Vec<&tradoshka_engine::ScoredWallet> = qualified.iter().collect();
+        s.basket_consensus.build_baskets_from_wallets(&refs);
+
+        tracing::info!("Copy trading initialized: {} wallets scored, {} qualified, {} baskets built",
+            s.wallet_scorer.wallet_count(),
+            s.wallet_scorer.qualified_count(),
+            s.basket_consensus.basket_count());
     }
 
     tracing::info!("Starting Tradoshka in DRY MODE with ${initial_balance} initial balance");

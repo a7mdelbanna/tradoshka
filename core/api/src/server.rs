@@ -40,6 +40,7 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/evolution/stats", get(evolution_routes::get_evolution_stats))
         .route("/api/evolution/trigger", post(evolution_routes::trigger_evolution))
         .route("/api/evolution/wallet/{name}", get(evolution_routes::get_strategy_wallet))
+        .route("/api/copy-trading/status", get(routes::get_copy_trading_status))
         .route("/ws", get(ws_handler))
         .route("/ws/trading", get(trading_ws::trading_ws_handler))
         .layer(CorsLayer::permissive())

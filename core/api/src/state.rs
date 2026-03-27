@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService, PerpWallet, StrategyWalletManager, EvolutionEngine, DataLogger};
+use tradoshka_engine::{OrderManager, PortfolioTracker, DryModeEngine, SimulatedWallet, TradeRecorder, ReadinessScorer, MarketDataService, MarketDataConfig, Orchestrator, OrchestratorConfig, CryptoDataService, PerpWallet, StrategyWalletManager, EvolutionEngine, DataLogger, WalletScorer, BasketConsensus, CopyEngine, CopyCircuitBreaker};
 use tradoshka_risk::TradoshkaRiskManager;
 use tradoshka_polymarket::adapter::PolymarketAdapter;
 use tradoshka_crypto::adapter::CryptoAdapter;
@@ -38,6 +38,11 @@ pub struct AppState {
     pub strategy_manager: StrategyWalletManager,
     pub evolution_engine: EvolutionEngine,
     pub data_logger: DataLogger,
+    // Copy trading components
+    pub wallet_scorer: WalletScorer,
+    pub basket_consensus: BasketConsensus,
+    pub copy_engine: CopyEngine,
+    pub copy_circuit_breaker: CopyCircuitBreaker,
 }
 
 impl AppState {
@@ -71,6 +76,10 @@ impl AppState {
             },
             evolution_engine: EvolutionEngine::new(),
             data_logger: DataLogger::new("data"),
+            wallet_scorer: WalletScorer::new(),
+            basket_consensus: BasketConsensus::new(),
+            copy_engine: CopyEngine::new(),
+            copy_circuit_breaker: CopyCircuitBreaker::new(100.0), // $100 per strategy
         }
     }
 
