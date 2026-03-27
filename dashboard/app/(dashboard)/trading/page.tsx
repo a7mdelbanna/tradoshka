@@ -99,30 +99,41 @@ function TradingContent() {
   const handleScan = async () => { try { await api.triggerScan(); } catch {} };
   const handleCycle = async () => { try { await api.triggerCycle(); } catch {} };
 
-  // PM strategy wallet aggregation
+  // Strategy wallet aggregation — filtered by current market/subtab
   const allStrategies: any[] = evolutionData?.strategies ?? evolutionData?.leaderboard ?? [];
-  const pmStrategies = allStrategies.filter((s: any) => {
-    const m = (s.market ?? "").toLowerCase();
-    return m.includes("poly");
-  });
-  const pmWithTrades = pmStrategies.filter((s: any) => (s.trades ?? 0) > 0);
-  const pmTotalEquity = pmStrategies.reduce((sum: number, s: any) => sum + (s.equity ?? 0), 0);
-  const pmTotalTrades = pmStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
-  const pmTotalPnl = pmStrategies.reduce((sum: number, s: any) => sum + (s.total_pnl ?? s.pnl ?? 0), 0);
+
+  const marketStrategies = selectedMarket === "polymarket"
+    ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase().includes("poly"))
+    : selectedMarket === "crypto" && cryptoSubTab === "spot"
+      ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_spot")
+      : selectedMarket === "crypto" && cryptoSubTab === "perps"
+        ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase() === "crypto_perps")
+        : [];
+
+  // Keep pmStrategies as alias for backwards compat with aggregation below
+  const pmStrategies = marketStrategies;
+  const pmWithTrades = marketStrategies.filter((s: any) => (s.trades ?? 0) > 0);
+  const pmTotalEquity = marketStrategies.reduce((sum: number, s: any) => sum + (s.equity ?? 0), 0);
+  const pmTotalTrades = marketStrategies.reduce((sum: number, s: any) => sum + (s.trades ?? 0), 0);
+  const pmTotalPnl = marketStrategies.reduce((sum: number, s: any) => sum + (s.total_pnl ?? s.pnl ?? 0), 0);
+
+  // Dynamic label for the "Top Strategies" card
+  const strategyMarketLabel = selectedMarket === "polymarket" ? "PM"
+    : cryptoSubTab === "perps" ? "CP" : "CS";
 
   // Determine which wallet to show
-  const isPolymarketSelected = selectedMarket === "polymarket";
+  const isSpecificMarketSelected = selectedMarket !== "all";
   const mainWalletTrades = (marketWallet as any)?.total_trades ?? (marketWallet as any)?.open_positions ?? 0;
-  const showPmAggregated = isPolymarketSelected && mainWalletTrades === 0 && pmStrategies.length > 0 && !selectedStrategy;
+  const showPmAggregated = isSpecificMarketSelected && mainWalletTrades === 0 && marketStrategies.length > 0 && !selectedStrategy;
 
-  // Build a synthetic aggregated wallet for PM when main is empty
+  // Build a synthetic aggregated wallet when main is empty
   const pmAggregatedWallet = showPmAggregated ? {
-    balance: pmStrategies.reduce((sum: number, s: any) => sum + (s.balance ?? 0), 0).toFixed(4),
+    balance: marketStrategies.reduce((sum: number, s: any) => sum + (s.balance ?? 0), 0).toFixed(4),
     equity: pmTotalEquity.toFixed(4),
-    unrealized_pnl: pmStrategies.reduce((sum: number, s: any) => sum + (s.unrealized_pnl ?? 0), 0).toFixed(4),
-    realized_pnl: pmStrategies.reduce((sum: number, s: any) => sum + (s.realized_pnl ?? 0), 0).toFixed(4),
+    unrealized_pnl: marketStrategies.reduce((sum: number, s: any) => sum + (s.unrealized_pnl ?? 0), 0).toFixed(4),
+    realized_pnl: marketStrategies.reduce((sum: number, s: any) => sum + (s.realized_pnl ?? 0), 0).toFixed(4),
     drawdown_pct: "0",
-    open_positions: pmStrategies.reduce((sum: number, s: any) => sum + (s.open_positions ?? 0), 0),
+    open_positions: marketStrategies.reduce((sum: number, s: any) => sum + (s.open_positions ?? 0), 0),
   } : null;
 
   // Normalize strategy wallet response to WalletData shape
@@ -140,7 +151,7 @@ function TradingContent() {
     activeWallet = normalizedStrategyWallet;
   } else if (showPmAggregated) {
     activeWallet = pmAggregatedWallet;
-  } else if (selectedMarket !== "all") {
+  } else if (isSpecificMarketSelected) {
     activeWallet = marketWallet || wallets[effectiveMarket] || null;
   } else {
     activeWallet = wallet;
@@ -278,12 +289,12 @@ function TradingContent() {
                 Portfolio
               </h2>
 
-              {/* Strategy wallet picker — shown when Polymarket is selected */}
-              {isPolymarketSelected && pmStrategies.length > 0 && (
+              {/* Strategy wallet picker — shown when a specific market is selected */}
+              {isSpecificMarketSelected && marketStrategies.length > 0 && (
                 <div className="mb-4 space-y-3">
                   <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                    {pmStrategies.length} Strategy Wallets
+                    {marketStrategies.length} Strategy Wallets
                   </div>
                   <select
                     value={selectedStrategy || ""}
@@ -291,7 +302,7 @@ function TradingContent() {
                     className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald-500/50"
                   >
                     <option value="">All Strategies (aggregated)</option>
-                    {pmStrategies.map((s: any) => (
+                    {marketStrategies.map((s: any) => (
                       <option key={s.name ?? s.id} value={s.name ?? s.id}>
                         {s.name ?? s.id} — ${((s.total_pnl ?? s.pnl ?? 0)).toFixed(2)} ({s.trades ?? 0} trades)
                       </option>
@@ -359,13 +370,13 @@ function TradingContent() {
               )}
             </div>
 
-            {/* PM top strategies panel — shown when aggregated view active */}
-            {isPolymarketSelected && !selectedStrategy && pmWithTrades.length > 0 && (
+            {/* Top strategies panel — shown when aggregated view active for any specific market */}
+            {isSpecificMarketSelected && !selectedStrategy && pmWithTrades.length > 0 && (
               <div className="glass-panel rounded-2xl p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
                     <span className="w-1 h-4 rounded-full bg-gradient-to-b from-blue-400 to-purple-500" />
-                    Top PM Strategies
+                    Top {strategyMarketLabel} Strategies
                   </h2>
                   <Link
                     href="/evolution"
