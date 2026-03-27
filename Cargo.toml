@@ -9,6 +9,7 @@ members = [
     "bridge",
     "markets/polymarket",
     "markets/crypto",
+    "markets/memecoins",
 ]
 
 [workspace.package]
