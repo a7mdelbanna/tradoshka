@@ -147,9 +147,25 @@ function TradingContent() {
   }
 
   // Determine which trades to show
-  const activeTrades = selectedMarket !== "all" && marketTrades?.trades
-    ? marketTrades.trades
-    : trades;
+  const activeTrades = selectedStrategy && strategyWallet?.trades_list
+    ? strategyWallet.trades_list
+    : (selectedMarket !== "all" && marketTrades?.trades)
+      ? marketTrades.trades
+      : trades;
+
+  // Override wallet display values with strategy wallet when one is selected
+  const displayWallet = selectedStrategy && strategyWallet
+    ? {
+        balance: String(strategyWallet.balance ?? "0"),
+        equity: String(strategyWallet.equity ?? "0"),
+        unrealized_pnl: String(strategyWallet.unrealized_pnl ?? "0"),
+        realized_pnl: String(strategyWallet.realized_pnl ?? "0"),
+        drawdown_pct: String(strategyWallet.drawdown_pct ?? "0"),
+        open_positions: strategyWallet.open_positions ?? strategyWallet.positions?.length ?? 0,
+        total_fees: String(strategyWallet.fees ?? "0"),
+        mode: "Dry" as const,
+      }
+    : activeWallet;
 
   // Count trades by market for tab badges — sourced from API, not WS trades
   const polymarketCount = trades.filter((t) => {
@@ -305,10 +321,42 @@ function TradingContent() {
               )}
 
               <PortfolioPanel
-                wallet={activeWallet}
+                wallet={displayWallet}
                 marketLabel={selectedStrategy ? `${selectedStrategy}` : marketLabel}
                 marketType={marketType}
               />
+
+              {/* Strategy wallet open positions */}
+              {selectedStrategy && strategyWallet?.positions?.length > 0 && (
+                <div className="mt-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                    Open Positions ({strategyWallet.positions.length})
+                  </h3>
+                  <div className="space-y-2">
+                    {strategyWallet.positions.map((pos: any, i: number) => {
+                      const upnl = parseFloat(pos.unrealized_pnl || "0");
+                      return (
+                        <div key={i} className="bg-slate-800/30 border border-slate-700/30 rounded-lg p-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-slate-200 truncate max-w-[200px]">
+                              {pos.question || pos.token_id}
+                            </span>
+                            <span className={`text-xs font-semibold ${upnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                              {upnl >= 0 ? "+" : ""}${upnl.toFixed(4)}
+                            </span>
+                          </div>
+                          <div className="flex gap-3 text-[10px] text-slate-500">
+                            <span>{pos.outcome} {pos.side}</span>
+                            <span>{pos.shares} shares</span>
+                            <span>Entry: ${parseFloat(pos.avg_price).toFixed(4)}</span>
+                            <span>Mark: ${parseFloat(pos.current_price).toFixed(4)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* PM top strategies panel — shown when aggregated view active */}
@@ -377,7 +425,7 @@ function TradingContent() {
                   </span>
                 </div>
               </div>
-              <TradeFeed trades={activeTrades} marketFilter={selectedMarket} />
+              <TradeFeed trades={activeTrades} marketFilter={selectedStrategy ? undefined : selectedMarket} />
             </div>
 
             {/* Charts */}
