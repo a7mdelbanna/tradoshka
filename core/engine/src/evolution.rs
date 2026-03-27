@@ -71,10 +71,10 @@ impl EvolutionEngine {
             alive.iter().map(|s| s.sharpe_ratio()).sum::<f64>() / alive.len() as f64
         };
 
-        // Find best overall
-        let ranked = manager.rank_by_sharpe(0);
+        // Find best overall by composite fitness
+        let ranked = manager.rank_by_fitness(0);
         let (best_name, best_sharpe) = ranked.first()
-            .map(|(n, s)| (Some(n.to_string()), *s))
+            .map(|(n, s)| (Some(n.clone()), *s))
             .unwrap_or((None, 0.0));
 
         let report = EvolutionReport {
@@ -98,11 +98,10 @@ impl EvolutionEngine {
         let mut killed = Vec::new();
         let mut spawned = Vec::new();
 
-        // Get strategies for this market only
-        let market_ranked: Vec<(String, f64)> = manager.rank_by_sharpe(self.min_trades_for_ranking)
+        // Get strategies for this market only, ranked by composite fitness
+        let market_ranked: Vec<(String, f64)> = manager.rank_by_fitness(self.min_trades_for_ranking)
             .into_iter()
             .filter(|(name, _)| name.starts_with(prefix))
-            .map(|(name, sharpe)| (name.to_string(), sharpe))
             .collect();
 
         let ranked_count = market_ranked.len();
@@ -126,10 +125,13 @@ impl EvolutionEngine {
             if market_alive - killed.len() <= min_per_market { break; }
             if !manager.can_kill() { break; }
             if let Some(slot) = manager.get_mut(name) {
+                let fitness = StrategyWalletManager::fitness_score_for(slot);
                 let reason = format!(
-                    "Bottom 10% in {} by Sharpe (hour {}). Sharpe: {:.2}, PnL: ${:.2}, WR: {:.0}%, Trades: {}",
+                    "Bottom 10% in {} by composite fitness (hour {}). \
+                     Fitness: {:.4}, Sharpe: {:.2}, PnL: ${:.2}, WR: {:.0}%, Trades: {}",
                     prefix.trim_end_matches('-'), self.hour,
-                    slot.sharpe_ratio(), slot.pnl_pct(), slot.win_rate() * 100.0, slot.trade_count()
+                    fitness, slot.sharpe_ratio(), slot.pnl_pct(),
+                    slot.win_rate() * 100.0, slot.trade_count()
                 );
                 slot.kill(&reason);
                 killed.push(name.clone());
@@ -193,7 +195,7 @@ mod tests {
     use super::*;
 
     fn setup_manager() -> StrategyWalletManager {
-        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
+        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
         mgr.initialize_defaults();
         mgr
     }
@@ -214,7 +216,7 @@ mod tests {
         assert_eq!(report.hour, 1);
         assert_eq!(report.killed.len(), 0);
         assert_eq!(report.spawned.len(), 0);
-        assert_eq!(report.alive_count, 60);
+        assert_eq!(report.alive_count, 120);
     }
 
     #[test]
@@ -223,9 +225,9 @@ mod tests {
         engine.min_trades_for_ranking = 0; // Rank even with 0 trades
         let mut mgr = setup_manager();
         let report = engine.evolve(&mut mgr);
-        // 60 strategies, bottom 10% = 6 killed, top 10% = 6 spawned
+        // 120 strategies, bottom 10% = 12 killed, top 10% = 12 spawned
         assert!(report.killed.len() >= 1);
-        assert!(report.alive_count < 62); // Some killed, some spawned
+        assert!(report.alive_count < 122); // Some killed, some spawned
     }
 
     #[test]
@@ -241,11 +243,11 @@ mod tests {
     fn test_evolve_respects_min_alive() {
         let mut engine = EvolutionEngine::new();
         engine.min_trades_for_ranking = 0;
-        let mut mgr = StrategyWalletManager::new(80, 55, dec!(100)); // min_alive = 55
-        mgr.initialize_defaults(); // 60 alive
-        // Can only kill 5 (60 - 55 = 5 buffer)
+        let mut mgr = StrategyWalletManager::new(150, 115, dec!(100)); // min_alive = 115
+        mgr.initialize_defaults(); // 120 alive
+        // Can only kill 5 (120 - 115 = 5 buffer)
         let report = engine.evolve(&mut mgr);
-        assert!(mgr.alive_count() >= 55);
+        assert!(mgr.alive_count() >= 115);
     }
 
     #[test]

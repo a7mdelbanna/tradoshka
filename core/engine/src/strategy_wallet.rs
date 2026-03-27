@@ -178,6 +178,43 @@ impl StrategyWalletManager {
         ranked
     }
 
+    /// Public wrapper for computing fitness from a slot reference (used in evolution.rs).
+    pub fn fitness_score_for(slot: &StrategySlot) -> f64 {
+        Self::fitness_score(slot)
+    }
+
+    /// Calculate a composite fitness score for evolution ranking.
+    /// Not just Sharpe — considers multiple dimensions.
+    fn fitness_score(slot: &StrategySlot) -> f64 {
+        let sharpe = slot.sharpe_ratio();
+        let pnl = slot.pnl_pct();
+        let trades = slot.trade_count() as f64;
+        let win_rate = slot.win_rate();
+
+        // Composite score (weighted):
+        // 40% Sharpe ratio (risk-adjusted returns)
+        // 25% Raw PnL (absolute performance)
+        // 20% Win rate (consistency)
+        // 15% Trade count (activity — inactive strategies are penalized)
+        let sharpe_score = sharpe.clamp(-100.0, 100.0) / 100.0; // Normalize to -1 to 1
+        let pnl_score = (pnl / 10.0).clamp(-1.0, 1.0);          // $10 = max score
+        let wr_score = (win_rate * 2.0 - 1.0).clamp(-1.0, 1.0);  // 50% WR = 0, 100% = 1
+        let activity_score = (trades / 20.0).clamp(0.0, 1.0);     // 20+ trades = max
+
+        sharpe_score * 0.40 + pnl_score * 0.25 + wr_score * 0.20 + activity_score * 0.15
+    }
+
+    /// Rank alive strategies by composite fitness score (descending).
+    /// Only includes strategies with >= min_trades.
+    pub fn rank_by_fitness(&self, min_trades: usize) -> Vec<(String, f64)> {
+        let mut ranked: Vec<(String, f64)> = self.slots.values()
+            .filter(|s| s.is_alive() && s.trade_count() >= min_trades)
+            .map(|s| (s.name.clone(), Self::fitness_score(s)))
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked
+    }
+
     pub fn all_slots(&self) -> &HashMap<String, StrategySlot> {
         &self.slots
     }
@@ -227,39 +264,39 @@ mod tests {
 
     #[test]
     fn test_manager_initialize() {
-        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
+        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
         mgr.initialize_defaults();
-        assert_eq!(mgr.alive_count(), 60);
+        assert_eq!(mgr.alive_count(), 120);
         assert_eq!(mgr.dead_count(), 0);
     }
 
     #[test]
     fn test_manager_rank() {
-        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
+        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
         mgr.initialize_defaults();
         let ranked = mgr.rank_by_sharpe(0); // Include all (even 0 trades)
-        assert_eq!(ranked.len(), 60);
+        assert_eq!(ranked.len(), 120);
     }
 
     #[test]
     fn test_can_kill_respects_minimum() {
-        let mut mgr = StrategyWalletManager::new(80, 15, dec!(100));
+        let mut mgr = StrategyWalletManager::new(150, 20, dec!(100));
         mgr.initialize_defaults();
-        assert!(mgr.can_kill()); // 60 > 15
+        assert!(mgr.can_kill()); // 120 > 20
 
-        // Kill down to 15
-        let names: Vec<String> = mgr.alive_slots().iter().take(45).map(|s| s.name.clone()).collect();
+        // Kill down to 20
+        let names: Vec<String> = mgr.alive_slots().iter().take(100).map(|s| s.name.clone()).collect();
         for name in names {
             mgr.get_mut(&name).unwrap().kill("test");
         }
-        assert!(!mgr.can_kill()); // 15 == 15, can't kill more
+        assert!(!mgr.can_kill()); // 20 == 20, can't kill more
     }
 
     #[test]
     fn test_can_spawn_respects_maximum() {
-        let mut mgr = StrategyWalletManager::new(60, 15, dec!(100));
+        let mut mgr = StrategyWalletManager::new(120, 20, dec!(100));
         mgr.initialize_defaults();
-        assert!(!mgr.can_spawn()); // 60 == 60, can't spawn more
+        assert!(!mgr.can_spawn()); // 120 == 120, can't spawn more
     }
 
     #[test]

@@ -64,7 +64,7 @@ impl AppState {
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),
             crypto_data: CryptoDataService::new(),
             strategy_manager: {
-                let mut strategy_manager = StrategyWalletManager::new(80, 15, dec!(100));
+                let mut strategy_manager = StrategyWalletManager::new(150, 20, dec!(100));
                 strategy_manager.initialize_defaults();
                 strategy_manager
             },

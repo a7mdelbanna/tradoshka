@@ -312,7 +312,13 @@ async fn run_trading_loop(state: SharedState) {
                                 }
                             }
 
+                            let ema_fast_period = slot.indicators.ema_fast_period;
+                            let ema_slow_period = slot.indicators.ema_slow_period;
                             let ind = slot.indicators.update(&asset.symbol, price_f64);
+                            let ema_fast_val = ind.ema_fast.unwrap_or(0.0);
+                            let ema_slow_val = ind.ema_slow.unwrap_or(0.0);
+                            let rsi_val = ind.rsi.unwrap_or(50.0);
+                            let atr_val = ind.atr.unwrap_or(price_f64 * 0.02);
                             let snapshot = MarketSnapshot {
                                 symbol: asset.symbol.clone(),
                                 market: Market::Crypto,
@@ -320,7 +326,7 @@ async fn run_trading_loop(state: SharedState) {
                                 price_24h_ago: None,
                                 volume_24h: asset.volume_24h,
                                 volume_7d_avg: Some(asset.volume_24h * 0.8),
-                                atr_14: Decimal::from_f64(ind.atr.unwrap_or(price_f64 * 0.02)).unwrap_or(dec!(0)),
+                                atr_14: Decimal::from_f64(atr_val).unwrap_or(dec!(0)),
                                 rsi_14: ind.rsi,
                                 ema_9: ind.ema_fast.and_then(|v| Decimal::from_f64(v)),
                                 ema_21: ind.ema_slow.and_then(|v| Decimal::from_f64(v)),
@@ -328,10 +334,30 @@ async fn run_trading_loop(state: SharedState) {
                                 question: format!("{} Spot", asset.symbol),
                                 days_to_resolution: None,
                             };
-                            let thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
+                            let mut thesis = match ResearchEngine::analyze_crypto(&snapshot, &config) {
                                 Ok(t) => t,
                                 Err(_) => continue,
                             };
+
+                            // Enrich reasoning with full indicator details
+                            let ema_signal = if ema_fast_val > ema_slow_val { "BULLISH" } else { "BEARISH" };
+                            let risk_usd = thesis.risk_amount.to_f64().unwrap_or(0.0);
+                            thesis.reasoning = format!(
+                                "Strategy {} [EMA {}/{}]. {}: EMA_fast={:.2} vs EMA_slow={:.2} ({}). \
+                                 RSI={:.0}. ATR={:.4}. Volume ${:.0}/24h. \
+                                 Risk: ${:.2} (1%), R:R {:.1}x, SL at {:.4}, TP at {:.4}",
+                                slot_name,
+                                ema_fast_period, ema_slow_period,
+                                asset.symbol,
+                                ema_fast_val, ema_slow_val, ema_signal,
+                                rsi_val,
+                                atr_val,
+                                asset.volume_24h,
+                                risk_usd,
+                                thesis.reward_risk_ratio,
+                                thesis.hard_stop_loss,
+                                thesis.take_profit,
+                            );
 
                             // Cap to $10 and convert USD amount to coin quantity
                             let dollar_size = thesis.position_size.min(dec!(10));
@@ -364,10 +390,12 @@ async fn run_trading_loop(state: SharedState) {
                                     &thesis,
                                 ));
                                 tracing::info!(
-                                    "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x | {}",
+                                    "EVOLUTION {} BUY {} {} @ {} — R:R {:.1}x [EMA {}/{}={}/{} {}] | {}",
                                     slot_name, filled, asset.symbol, fill_price,
                                     thesis.reward_risk_ratio,
-                                    thesis.reasoning.chars().take(50).collect::<String>()
+                                    ema_fast_period, ema_slow_period,
+                                    ema_fast_val as i64, ema_slow_val as i64, ema_signal,
+                                    thesis.reasoning.chars().take(80).collect::<String>()
                                 );
                             }
                         }
@@ -450,16 +478,32 @@ async fn run_trading_loop(state: SharedState) {
 
                                 let hard_sl = price * dec!(0.20);
                                 let take_profit = (price + stop_distance * dec!(2)).min(dec!(0.99));
+                                let entry_reason_str = if has_mispricing && has_volume {
+                                    format!("mispricing {:.1}% AND volume ${:.0}/24h both exceeded thresholds (min_edge={:.1}%, min_vol=${:.0})",
+                                        deviation * 100.0, market.volume_24h, min_edge * 100.0, min_volume)
+                                } else if has_mispricing {
+                                    format!("mispricing {:.1}% > min_edge {:.1}% (volume ${:.0}/24h below ${:.0} threshold)",
+                                        deviation * 100.0, min_edge * 100.0, market.volume_24h, min_volume)
+                                } else {
+                                    format!("volume ${:.0}/24h > ${:.0} threshold (deviation {:.1}% below {:.1}% min_edge)",
+                                        market.volume_24h, min_volume, deviation * 100.0, min_edge * 100.0)
+                                };
                                 let thesis = tradoshka_engine::TradeThesis {
                                     reasoning: format!(
-                                        "PM strategy {}. Market: {}. Buy {} at {}. \
-                                         Deviation: {:.1}%. Volume: ${:.0}/24h",
+                                        "Strategy {} [PM value/arb]. Market: \"{}\". \
+                                         Signal: Buy {} at {}. Entry reason: {}. \
+                                         yes+no={:.4} (deviation {:.1}%). Volume ${:.0}/24h. \
+                                         Risk: ${:.4} (1%), R:R 2.0x, SL at {:.4}, TP at {:.4}",
                                         slot_name,
                                         market.question,
-                                        outcome,
-                                        price,
+                                        outcome, price,
+                                        entry_reason_str,
+                                        (market.yes_price + market.no_price).to_f64().unwrap_or(1.0),
                                         deviation * 100.0,
                                         market.volume_24h,
+                                        risk_amount.to_f64().unwrap_or(0.0),
+                                        hard_sl,
+                                        take_profit,
                                     ),
                                     signals_used: vec!["market_analysis".into()],
                                     signals_agreed: 1,
