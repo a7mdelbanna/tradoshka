@@ -29,6 +29,7 @@ class PredictionSimulation:
                 self.claude = client
             else:
                 logger.warning("Claude CLI not available, falling back to statistical mode")
+        self._seed = seed
         self.factory = AgentFactory(seed=seed)
         self.agent_count = agent_count
 
@@ -42,7 +43,7 @@ class PredictionSimulation:
         return scorer.aggregate(votes)
 
     def _simulate_statistical(self, agents: list[AgentPersona], world: SimulationWorld) -> list[AgentVote]:
-        rng = random.Random()
+        rng = random.Random(self._seed)
         votes = []
         for agent in agents:
             base = world.current_yes_price + (agent.bias * 0.15)
@@ -64,7 +65,7 @@ class PredictionSimulation:
                 logger.warning("Claude returned no valid votes, falling back to statistical")
                 return self._simulate_statistical(agents, world)
             return votes
-        except Exception as e:
+        except RuntimeError as e:
             logger.warning("Claude prediction failed (%s), falling back to statistical", e)
             return self._simulate_statistical(agents, world)
 
