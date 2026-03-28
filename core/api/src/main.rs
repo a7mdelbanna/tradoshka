@@ -115,22 +115,25 @@ async fn run_trading_loop(state: SharedState) {
                 let pm_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-")).count();
                 let cs_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-")).count();
                 let cp_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-")).count();
-                let mc_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-")).count();
+                let mc_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-") && !s.name.starts_with("MC2-")).count();
+                let mc2_alive = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC2-")).count();
 
                 let pm_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("PM-") && s.trade_count() > 0).count();
                 let cs_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CS-") && s.trade_count() > 0).count();
                 let cp_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("CP-") && s.trade_count() > 0).count();
-                let mc_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-") && s.trade_count() > 0).count();
+                let mc_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC-") && !s.name.starts_with("MC2-") && s.trade_count() > 0).count();
+                let mc2_trading = s.strategy_manager.alive_slots().iter().filter(|s| s.name.starts_with("MC2-") && s.trade_count() > 0).count();
 
-                tracing::info!("HEALTH CHECK: alive={}, dead={} | PM: {}/{} trading | CS: {}/{} trading | CP: {}/{} trading | MC: {}/{} trading | Evolution hour: {}",
+                tracing::info!("HEALTH CHECK: alive={}, dead={} | PM: {}/{} trading | CS: {}/{} trading | CP: {}/{} trading | MC: {}/{} trading | MC2: {}/{} trading | Evolution hour: {}",
                     alive, dead, pm_trading, pm_alive, cs_trading, cs_alive, cp_trading, cp_alive,
-                    mc_trading, mc_alive, s.evolution_engine.hour);
+                    mc_trading, mc_alive, mc2_trading, mc2_alive, s.evolution_engine.hour);
 
                 // Alert if any market has 0 trading strategies
                 if pm_alive == 0 { tracing::warn!("ALERT: No PM strategies alive!"); }
                 if cs_alive == 0 { tracing::warn!("ALERT: No CS strategies alive!"); }
                 if cp_alive == 0 { tracing::warn!("ALERT: No CP strategies alive!"); }
                 if mc_alive == 0 { tracing::warn!("ALERT: No MC strategies alive!"); }
+                if mc2_alive == 0 { tracing::warn!("ALERT: No MC2 AI strategies alive!"); }
             }
             _ = scan_ticker.tick() => {
                 let mut s = state.write().await;
@@ -1022,33 +1025,34 @@ async fn run_trading_loop(state: SharedState) {
                     }
                 }
 
+                // --- Meme Coin shared scan: tokens + meta for MC-* and MC2-* ---
+                // Phase 1: scan for tokens (needs write lock for scanner)
+                let tokens: Vec<tradoshka_memecoins::types::MemeToken> = {
+                    let mut s = state.write().await;
+                    s.memecoins.scanner.scan_trending().await
+                };
+
+                // Update volume tracker for all scanned tokens
+                {
+                    let mut s = state.write().await;
+                    for token in &tokens {
+                        s.memecoins.volume_tracker.update(&token.address, token.volume_5m, 0);
+                    }
+                }
+
+                // Phase 2: pre-compute safety scores and whale consensus (read-only from memecoins)
+                // This avoids the borrow conflict when we later mutably borrow strategy_manager.
+                let token_meta: Vec<(u32, usize)> = {
+                    let s = state.read().await;
+                    tokens.iter().map(|token| {
+                        let safety = s.memecoins.safety.quick_check(token);
+                        let whale_consensus = s.memecoins.whale_tracker.consensus_count(&token.address);
+                        (safety.score, whale_consensus)
+                    }).collect()
+                };
+
                 // --- Meme Coin strategy trading: route MC-* wallets ---
                 {
-                    // Phase 1: scan for tokens (needs write lock for scanner)
-                    let tokens: Vec<tradoshka_memecoins::types::MemeToken> = {
-                        let mut s = state.write().await;
-                        s.memecoins.scanner.scan_trending().await
-                    };
-
-                    // Update volume tracker for all scanned tokens
-                    {
-                        let mut s = state.write().await;
-                        for token in &tokens {
-                            s.memecoins.volume_tracker.update(&token.address, token.volume_5m, 0);
-                        }
-                    }
-
-                    // Phase 2: pre-compute safety scores and whale consensus (read-only from memecoins)
-                    // This avoids the borrow conflict when we later mutably borrow strategy_manager.
-                    let token_meta: Vec<(u32, usize)> = {
-                        let s = state.read().await;
-                        tokens.iter().map(|token| {
-                            let safety = s.memecoins.safety.quick_check(token);
-                            let whale_consensus = s.memecoins.whale_tracker.consensus_count(&token.address);
-                            (safety.score, whale_consensus)
-                        }).collect()
-                    };
-
                     // Phase 3: trade execution (write lock, strategy_manager mutably borrowed)
                     let mut s = state.write().await;
                     let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
@@ -1369,6 +1373,334 @@ async fn run_trading_loop(state: SharedState) {
                                     slot.wallet.add_gas_fee(rust_decimal_macros::dec!(0.151));
                                     slot.recorder.close_trade(symbol, slot_name, pnl);
                                     tracing::info!("MC V2 EXIT: {} | {} | {} | PnL: {:.1}% | held {}min",
+                                        slot_name, symbol, reason, pnl_pct, mins_held);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===================================================================
+                // MC2: AI-Powered Meme Coin Trading (Claude Scorer)
+                // ===================================================================
+                // Phase 1: Score tokens with Claude AI
+                // The `tokens` and `token_meta` vectors from the MC1 scan above
+                // are still in scope — we reuse them so we don't re-scan.
+                let ai_scores: Vec<Option<tradoshka_engine::TokenScore>> = {
+                    let mut s = state.write().await;
+                    s.claude_scorer.tick_cycle();
+                    s.claude_scorer.clear_expired_cache();
+
+                    tokens.iter().zip(token_meta.iter()).map(|(token, (safety_score, _))| {
+                        // Basic filters: safety >= 30, volume_5m >= 1000, liquidity >= 5000
+                        if *safety_score < 30 || token.volume_5m < 1000.0 || token.liquidity_usd < 5000.0 {
+                            return None;
+                        }
+                        s.claude_scorer.score_token(
+                            &token.name,
+                            &token.symbol,
+                            &token.address,
+                            token.market_cap,
+                            token.liquidity_usd,
+                            token.volume_5m,
+                            token.volume_24h,
+                            token.price_change_5m,
+                            token.price_change_1h,
+                            token.price_change_24h,
+                            token.age_minutes() as f64,
+                            *safety_score as f64,
+                        )
+                    }).collect()
+                };
+
+                let ai_scored_count = ai_scores.iter().filter(|sc| sc.is_some()).count();
+                if ai_scored_count > 0 {
+                    tracing::info!(
+                        "MC2 AI SCORING: {}/{} tokens scored by Claude (cycle {})",
+                        ai_scored_count, tokens.len(),
+                        { let s = state.read().await; s.claude_scorer.cycle_count() }
+                    );
+                }
+
+                // Phase 2: MC2 strategy trading loop
+                {
+                    let mut s = state.write().await;
+                    let data_logger: *const tradoshka_engine::DataLogger = &s.data_logger;
+
+                    let mc2_slots: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("MC2-"))
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &mc2_slots {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) if sl.is_alive() => sl,
+                            _ => continue,
+                        };
+
+                        let min_ai_score = slot.params.get("min_ai_score") as u32;
+                        let trust_ai_exits = slot.params.get("trust_ai_exits") > 0.5;
+                        let regime_filter = slot.params.get("regime_filter") as u32;
+                        let hard_stop_pct = {
+                            let h = slot.params.get("hard_stop_pct");
+                            if h > 0.0 { h } else { 15.0 }
+                        };
+                        let target_mult = slot.params.get("target_mult").max(1.1);
+                        let max_positions = slot.params.get("auto_position_count").max(1.0) as usize;
+                        let time_limit_mins_param = {
+                            let t = slot.params.get("time_limit_mins");
+                            if t > 0.0 { t } else { 25.0 }
+                        };
+
+                        for (token, ai_score_opt) in tokens.iter().zip(ai_scores.iter()) {
+                            if slot.wallet.open_position_count() >= max_positions { break; }
+
+                            // Must have an AI score
+                            let ai_score = match ai_score_opt {
+                                Some(s) => s,
+                                None => continue,
+                            };
+
+                            // Check: score >= min_ai_score
+                            if ai_score.score < min_ai_score { continue; }
+
+                            // Check: verdict != AVOID
+                            if ai_score.verdict == "AVOID" { continue; }
+
+                            // Check: regime matches regime_filter bitmask
+                            // 1=pump_phase, 2=distribution, 4=dead_cat, 8=organic_growth
+                            let regime_bit = match ai_score.regime.as_str() {
+                                "pump_phase" => 1u32,
+                                "distribution" => 2u32,
+                                "dead_cat" => 4u32,
+                                "organic_growth" => 8u32,
+                                _ => 0u32,
+                            };
+                            if regime_filter & regime_bit == 0 { continue; }
+
+                            // Skip if already have position in this token
+                            if slot.wallet.positions().keys().any(|k| k.starts_with(&format!("{}:", token.address))) { continue; }
+
+                            // Calculate position size via Kelly
+                            let price = rust_decimal::Decimal::from_f64(token.price_usd).unwrap_or(dec!(0));
+                            if price <= rust_decimal::Decimal::ZERO { continue; }
+                            let position_usd = slot.kelly_position_size(price);
+                            let size = if price > rust_decimal::Decimal::ZERO {
+                                (position_usd / price).round_dp(0)
+                            } else { continue };
+                            if size <= rust_decimal::Decimal::ZERO { continue; }
+
+                            // Determine SL/TP based on trust_ai_exits
+                            let (sl_pct, tp_pct, sl_source) = if trust_ai_exits {
+                                (ai_score.suggested_stop_pct, ai_score.suggested_target_pct, "AI")
+                            } else {
+                                (hard_stop_pct, (target_mult - 1.0) * 100.0, "Strategy")
+                            };
+
+                            let hard_stop_factor = rust_decimal::Decimal::from_f64(1.0 - sl_pct / 100.0)
+                                .unwrap_or(dec!(0.85));
+                            let take_profit_factor = rust_decimal::Decimal::from_f64(1.0 + tp_pct / 100.0)
+                                .unwrap_or(dec!(1.15));
+                            let hard_stop = price * hard_stop_factor;
+                            let take_profit = price * take_profit_factor;
+
+                            // Time stop: use time_limit_mins param
+                            let time_hours: u32 = (time_limit_mins_param / 60.0).ceil() as u32;
+
+                            // Execute buy
+                            if let Some((fill_price, fee, filled)) = slot.wallet.buy(
+                                &token.address,
+                                &format!("{} ({})", token.symbol, token.name),
+                                "Long",
+                                price,
+                                size,
+                                slot_name,
+                            ) {
+                                slot.wallet.add_gas_fee(dec!(0.151));
+
+                                slot.recorder.record(make_trade_record(
+                                    &token.address,
+                                    &format!("{} Meme", token.symbol),
+                                    "Long",
+                                    tradoshka_common::types::OrderSide::Buy,
+                                    tradoshka_common::types::Market::Crypto,
+                                    filled,
+                                    fill_price,
+                                    fee,
+                                    slot_name,
+                                    &tradoshka_engine::TradeThesis {
+                                        reasoning: format!(
+                                            "MC2 AI TRADE: {} ({}) | Claude score: {}/100, verdict: {}, regime: {} | \
+                                             SL: {:.1}% ({}), TP: {:.1}% ({}) | \
+                                             Safety: {}/100, MCap: ${:.0}, Vol5m: ${:.0} | AI reasoning: {}",
+                                            token.symbol, token.name,
+                                            ai_score.score, ai_score.verdict, ai_score.regime,
+                                            sl_pct, sl_source, tp_pct, sl_source,
+                                            token.safety_score, token.market_cap, token.volume_5m,
+                                            ai_score.reasoning.chars().take(120).collect::<String>()
+                                        ),
+                                        signals_used: vec!["claude_ai_score".into(), "safety_check".into(), "regime_filter".into()],
+                                        signals_agreed: 3,
+                                        signals_total: 3,
+                                        confidence: (ai_score.score as f64) / 100.0,
+                                        entry_price: price,
+                                        entry_reason: format!("{} at ${} [AI score {}]", token.symbol, token.price_usd, ai_score.score),
+                                        hard_stop_loss: hard_stop,
+                                        trailing_stop: price * dec!(0.90),
+                                        take_profit,
+                                        time_stop_hours: time_hours,
+                                        thesis_invalidation: "AI score invalidated or regime shift — MC2 exit system".into(),
+                                        risk_per_trade_pct: 1.0,
+                                        risk_amount: position_usd,
+                                        reward_risk_ratio: tp_pct / sl_pct,
+                                        position_size: size,
+                                        max_loss: position_usd,
+                                        strategy_tier: "Unproven".into(),
+                                    },
+                                ));
+
+                                // SAFETY: data_logger is a disjoint field from strategy_manager.
+                                unsafe {
+                                    (*data_logger).log_trade(&serde_json::json!({
+                                        "type": "MC2_AI_TRADE",
+                                        "strategy": slot_name,
+                                        "token": token.symbol,
+                                        "address": token.address,
+                                        "price": token.price_usd,
+                                        "ai_score": ai_score.score,
+                                        "ai_verdict": ai_score.verdict,
+                                        "ai_regime": ai_score.regime,
+                                        "sl_pct": sl_pct,
+                                        "tp_pct": tp_pct,
+                                        "sl_source": sl_source,
+                                        "safety_score": token.safety_score,
+                                        "mcap": token.market_cap,
+                                        "volume_5m": token.volume_5m,
+                                    }));
+                                }
+
+                                tracing::info!(
+                                    "MC2 AI {} BUY {} {} @ {} | AI={}/100 {} {} | SL={:.1}%({}) TP={:.1}%({}) | safety={} vol5m=${:.0}",
+                                    slot_name, filled, token.symbol, fill_price,
+                                    ai_score.score, ai_score.verdict, ai_score.regime,
+                                    sl_pct, sl_source, tp_pct, sl_source,
+                                    token.safety_score, token.volume_5m
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Update MC2-* strategy wallet prices from meme coin scanner
+                {
+                    let mut s = state.write().await;
+                    let mc2_prices: std::collections::HashMap<String, rust_decimal::Decimal> = s.memecoins.scanner
+                        .tracked_tokens().iter()
+                        .filter_map(|t| {
+                            rust_decimal::Decimal::from_f64(t.price_usd)
+                                .map(|p| (t.address.clone(), p))
+                        })
+                        .collect();
+
+                    if !mc2_prices.is_empty() {
+                        let mc2_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                            .iter()
+                            .filter(|sl| sl.name.starts_with("MC2-"))
+                            .map(|sl| sl.name.clone())
+                            .collect();
+                        for name in &mc2_slot_names {
+                            if let Some(slot) = s.strategy_manager.get_mut(name) {
+                                slot.wallet.update_prices(&mc2_prices);
+                            }
+                        }
+                    }
+                }
+
+                // Phase 3: MC2 position monitor
+                {
+                    let mut s = state.write().await;
+
+                    let mc2_slot_names: Vec<String> = s.strategy_manager.alive_slots()
+                        .iter()
+                        .filter(|sl| sl.name.starts_with("MC2-") && sl.trade_count() > 0)
+                        .map(|sl| sl.name.clone())
+                        .collect();
+
+                    for slot_name in &mc2_slot_names {
+                        let slot = match s.strategy_manager.get_mut(slot_name) {
+                            Some(sl) => sl,
+                            None => continue,
+                        };
+
+                        let time_limit_mins: i64 = {
+                            let t = slot.params.get("time_limit_mins");
+                            if t > 0.0 { t as i64 } else { 25 }
+                        };
+
+                        // Collect position data for iteration
+                        let pos_data: Vec<_> = slot.wallet.positions().iter().map(|(k, p)| {
+                            (k.clone(), p.current_price, p.avg_price, p.opened_at, p.token_id.clone())
+                        }).collect();
+
+                        for (pos_key, current_price, entry_price, opened_at, _token_id) in &pos_data {
+                            if *entry_price <= rust_decimal::Decimal::ZERO { continue; }
+
+                            let pnl_pct = ((*current_price - *entry_price) / *entry_price
+                                * rust_decimal::Decimal::new(100, 0))
+                                .to_f64().unwrap_or(0.0);
+                            let mins_held = (chrono::Utc::now() - *opened_at).num_minutes();
+
+                            // Look up the trade record to find the SL/TP (which may be AI-sourced)
+                            let symbol = pos_key.split(':').next().unwrap_or(pos_key.as_str());
+                            let (sl_price, tp_price) = {
+                                let trade = slot.recorder.all_trades().iter().rev().find(|t| {
+                                    t.symbol == symbol && t.strategy_id == *slot_name && !t.is_closed
+                                });
+                                match trade {
+                                    Some(t) => (t.stop_loss, t.take_profit),
+                                    None => {
+                                        // Fallback: -15% SL, +15% TP
+                                        (*entry_price * dec!(0.85), *entry_price * dec!(1.15))
+                                    }
+                                }
+                            };
+
+                            // Compute SL/TP percentages for exit check
+                            let sl_pct_threshold: f64 = if *entry_price > rust_decimal::Decimal::ZERO {
+                                let diff: Decimal = *entry_price - sl_price;
+                                (diff / *entry_price * Decimal::new(100, 0))
+                                    .to_f64().unwrap_or(15.0)
+                            } else { 15.0 };
+                            let tp_pct_threshold: f64 = if *entry_price > rust_decimal::Decimal::ZERO {
+                                let diff: Decimal = tp_price - *entry_price;
+                                (diff / *entry_price * Decimal::new(100, 0))
+                                    .to_f64().unwrap_or(15.0)
+                            } else { 15.0 };
+
+                            // Exit conditions
+                            let (should_close, reason, exit_type) = if pnl_pct <= -sl_pct_threshold {
+                                (true, format!("MC2 STOP LOSS: {:.1}% loss (SL at -{:.1}%)", pnl_pct, sl_pct_threshold),
+                                    tradoshka_engine::ExitType::StopLoss)
+                            } else if pnl_pct >= tp_pct_threshold {
+                                (true, format!("MC2 TAKE PROFIT: {:.1}% gain (TP at +{:.1}%)", pnl_pct, tp_pct_threshold),
+                                    tradoshka_engine::ExitType::TakeProfit)
+                            } else if time_limit_mins > 0 && mins_held >= time_limit_mins {
+                                (true, format!("MC2 TIME STOP: {}min held (limit {}min)", mins_held, time_limit_mins),
+                                    tradoshka_engine::ExitType::TimeStop)
+                            } else {
+                                (false, String::new(), tradoshka_engine::ExitType::Manual)
+                            };
+
+                            if should_close {
+                                if let Some((_, _, pnl)) = slot.wallet.sell_with_exit_type(
+                                    symbol, *current_price,
+                                    rust_decimal::Decimal::MAX, slot_name,
+                                    exit_type,
+                                ) {
+                                    slot.wallet.add_gas_fee(dec!(0.151));
+                                    slot.recorder.close_trade(symbol, slot_name, pnl);
+                                    tracing::info!("MC2 AI EXIT: {} | {} | {} | PnL: {:.1}% | held {}min",
                                         slot_name, symbol, reason, pnl_pct, mins_held);
                                 }
                             }
