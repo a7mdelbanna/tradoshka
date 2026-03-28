@@ -25,7 +25,7 @@ function TradingContent() {
   const searchParams = useSearchParams();
   const [selectedMarket, setSelectedMarket] = useState<string>("all");
   const [cryptoSubTab, setCryptoSubTab] = useState<"spot" | "perps">("spot");
-  const [mcSubTab, setMcSubTab] = useState<"all" | "ed" | "tr" | "wc">("all");
+  const [mcSubTab, setMcSubTab] = useState<"all" | "tr" | "ct">("all");
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
 
   // Read market selection from URL query params (set by sidebar)
@@ -107,16 +107,14 @@ function TradingContent() {
   // Strategy wallet aggregation — filtered by current market/subtab
   const allStrategies: any[] = evolutionData?.strategies ?? evolutionData?.leaderboard ?? [];
 
-  // Meme coin strategy groups (filtered by name prefix)
+  // Meme coin strategy groups (V2: TR = trend riding, CT = copy trading)
   const mcStrategies = allStrategies.filter((s: any) => s.name?.startsWith("MC-"));
-  const mcEdStrategies = mcStrategies.filter((s: any) => s.name?.includes("-ED-"));
-  const mcTrStrategies = mcStrategies.filter((s: any) => s.name?.includes("-TR-"));
-  const mcWcStrategies = mcStrategies.filter((s: any) => s.name?.includes("-WC-"));
+  const mcTrStrategies = mcStrategies.filter((s: any) => s.name?.includes("-TR-") || s.strategy_type === "mc_trend_v2");
+  const mcCtStrategies = mcStrategies.filter((s: any) => s.name?.includes("-CT-") || s.strategy_type === "mc_copy_v2");
 
   const filteredMcStrategies = mcSubTab === "all" ? mcStrategies
-    : mcSubTab === "ed" ? mcEdStrategies
     : mcSubTab === "tr" ? mcTrStrategies
-    : mcWcStrategies;
+    : mcCtStrategies;
 
   const marketStrategies = selectedMarket === "polymarket"
     ? allStrategies.filter((s: any) => (s.market ?? "").toLowerCase().includes("poly"))
@@ -304,9 +302,8 @@ function TradingContent() {
           perpsCount={perpsCount}
           mcSubTab={mcSubTab}
           onMcSubTabSelect={setMcSubTab}
-          mcEdCount={mcEdStrategies.length}
           mcTrCount={mcTrStrategies.length}
-          mcWcCount={mcWcStrategies.length}
+          mcCtCount={mcCtStrategies.length}
         />
 
         {/* Split Screen */}

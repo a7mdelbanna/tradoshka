@@ -428,7 +428,7 @@ export default function EvolutionPage() {
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [marketFilter, setMarketFilter] = useState<string>("all");
   const [pmSubFilter, setPmSubFilter] = useState<"all" | "ct" | "ai">("all");
-  const [mcSubFilter, setMcSubFilter] = useState<"all" | "ed" | "tr" | "wc">("all");
+  const [mcSubFilter, setMcSubFilter] = useState<"all" | "tr" | "ct">("all");
 
   const { data: statsRaw } = useQuery({
     queryKey: ["evolution-stats"],
@@ -484,18 +484,16 @@ export default function EvolutionPage() {
 
   // MC sub-filter counts (filter by name prefix since market field says "crypto")
   const mcStrategies = leaderboard.filter((s) => s.name?.startsWith("MC-"));
-  const mcEdCount = mcStrategies.filter((s) => s.name?.includes("-ED-")).length;
-  const mcTrCount = mcStrategies.filter((s) => s.name?.includes("-TR-")).length;
-  const mcWcCount = mcStrategies.filter((s) => s.name?.includes("-WC-")).length;
+  const mcTrCount = mcStrategies.filter((s) => s.name?.includes("-TR-") || s.strategy_type === "mc_trend_v2").length;
+  const mcCtCount = mcStrategies.filter((s) => s.name?.includes("-CT-") || s.strategy_type === "mc_copy_v2").length;
 
   // Apply market filter (+ PM/MC sub-filter) to leaderboard
   const filteredLeaderboard = leaderboard.filter((s) => {
     if (marketFilter === "memecoins") {
       if (!s.name?.startsWith("MC-")) return false;
       if (mcSubFilter !== "all") {
-        if (mcSubFilter === "ed" && !s.name.includes("-ED-")) return false;
-        if (mcSubFilter === "tr" && !s.name.includes("-TR-")) return false;
-        if (mcSubFilter === "wc" && !s.name.includes("-WC-")) return false;
+        if (mcSubFilter === "tr" && !s.name.includes("-TR-") && s.strategy_type !== "mc_trend_v2") return false;
+        if (mcSubFilter === "ct" && !s.name.includes("-CT-") && s.strategy_type !== "mc_copy_v2") return false;
       }
       return true;
     }
@@ -698,16 +696,6 @@ export default function EvolutionPage() {
                     All MC <span className="ml-1 text-[10px] opacity-60">{mcStrategies.length}</span>
                   </button>
                   <button
-                    onClick={() => setMcSubFilter("ed")}
-                    className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
-                      mcSubFilter === "ed"
-                        ? "bg-rose-400/15 text-rose-300 border border-rose-400/30"
-                        : "text-slate-500 hover:text-slate-300"
-                    }`}
-                  >
-                    Early Detection <span className="ml-1 text-[10px] opacity-60">{mcEdCount}</span>
-                  </button>
-                  <button
                     onClick={() => setMcSubFilter("tr")}
                     className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
                       mcSubFilter === "tr"
@@ -718,14 +706,14 @@ export default function EvolutionPage() {
                     Trend Riding <span className="ml-1 text-[10px] opacity-60">{mcTrCount}</span>
                   </button>
                   <button
-                    onClick={() => setMcSubFilter("wc")}
+                    onClick={() => setMcSubFilter("ct")}
                     className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
-                      mcSubFilter === "wc"
+                      mcSubFilter === "ct"
                         ? "bg-purple-400/15 text-purple-300 border border-purple-400/30"
                         : "text-slate-500 hover:text-slate-300"
                     }`}
                   >
-                    Whale Copy <span className="ml-1 text-[10px] opacity-60">{mcWcCount}</span>
+                    Copy Trading <span className="ml-1 text-[10px] opacity-60">{mcCtCount}</span>
                   </button>
                 </div>
               )}

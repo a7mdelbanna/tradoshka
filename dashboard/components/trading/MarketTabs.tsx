@@ -12,11 +12,10 @@ interface MarketTabsProps {
   onCryptoSubTabSelect?: (tab: "spot" | "perps") => void;
   spotCount?: number;
   perpsCount?: number;
-  mcSubTab?: "all" | "ed" | "tr" | "wc";
-  onMcSubTabSelect?: (tab: "all" | "ed" | "tr" | "wc") => void;
-  mcEdCount?: number;
+  mcSubTab?: "all" | "tr" | "ct";
+  onMcSubTabSelect?: (tab: "all" | "tr" | "ct") => void;
   mcTrCount?: number;
-  mcWcCount?: number;
+  mcCtCount?: number;
 }
 
 const TAB_CONFIG: Record<string, { accent: string; glow: string; bg: string; border: string; badge: string }> = {
@@ -62,9 +61,8 @@ export function MarketTabs({
   perpsCount = 0,
   mcSubTab = "all",
   onMcSubTabSelect,
-  mcEdCount = 0,
   mcTrCount = 0,
-  mcWcCount = 0,
+  mcCtCount = 0,
 }: MarketTabsProps) {
   const tabs = [
     { id: "all", label: "All Markets", count: polymarketCount + cryptoCount + memecoinsCount, icon: "\u25C9" },
@@ -136,17 +134,7 @@ export function MarketTabs({
                 : "text-slate-500 hover:text-slate-300"
             }`}
           >
-            All <span className="ml-1 text-[10px] opacity-60">{mcEdCount + mcTrCount + mcWcCount}</span>
-          </button>
-          <button
-            onClick={() => onMcSubTabSelect("ed")}
-            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
-              mcSubTab === "ed"
-                ? "bg-rose-400/15 text-rose-300 border border-rose-400/30"
-                : "text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            Early Detection <span className="ml-1 text-[10px] opacity-60">{mcEdCount}</span>
+            All <span className="ml-1 text-[10px] opacity-60">{mcTrCount + mcCtCount}</span>
           </button>
           <button
             onClick={() => onMcSubTabSelect("tr")}
@@ -159,14 +147,14 @@ export function MarketTabs({
             Trend Riding <span className="ml-1 text-[10px] opacity-60">{mcTrCount}</span>
           </button>
           <button
-            onClick={() => onMcSubTabSelect("wc")}
+            onClick={() => onMcSubTabSelect("ct")}
             className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all ${
-              mcSubTab === "wc"
+              mcSubTab === "ct"
                 ? "bg-purple-400/15 text-purple-300 border border-purple-400/30"
                 : "text-slate-500 hover:text-slate-300"
             }`}
           >
-            Whale Copy <span className="ml-1 text-[10px] opacity-60">{mcWcCount}</span>
+            Copy Trading <span className="ml-1 text-[10px] opacity-60">{mcCtCount}</span>
           </button>
         </div>
       )}
