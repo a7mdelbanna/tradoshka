@@ -164,7 +164,9 @@ impl StrategySlot {
             if auto_position_count <= Decimal::ZERO {
                 return Decimal::ZERO;
             }
-            return equity * (capital_usage_pct / dec!(100)) / auto_position_count * auto_leverage;
+            // Cap at 5% of equity (same as Kelly max) to prevent over-sized positions
+            let fallback = equity * (capital_usage_pct / dec!(100)) / auto_position_count * auto_leverage;
+            return fallback.min(equity * dec!(5) / dec!(100));
         }
 
         // Half-Kelly calculation
@@ -452,7 +454,8 @@ mod tests {
         let slot = StrategySlot::new("MC-TR-new", "meme_coins", params, dec!(100));
 
         let size = slot.kelly_position_size(dec!(0.001));
-        let expected = dec!(100) * dec!(0.60) / dec!(15) * dec!(5);
-        assert!((size - expected).abs() < dec!(1), "Before 10 trades, should use fixed formula. Got {} expected ~{}", size, expected);
+        // Fallback formula: $100 * 60% / 15 * 5 = $20, but capped at 5% of equity = $5
+        let expected = dec!(5); // 5% of $100 equity
+        assert!((size - expected).abs() < dec!(1), "Before 10 trades, should use capped fallback. Got {} expected ~{}", size, expected);
     }
 }
