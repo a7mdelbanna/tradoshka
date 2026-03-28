@@ -1130,22 +1130,29 @@ async fn run_trading_loop(state: SharedState) {
                                 if max_mcap > 0.0 && token.market_cap > max_mcap { continue; }
                             }
 
-                            // Calculate position size — $10-20 for V2, $5 max for legacy
-                            let equity = slot.wallet.equity();
-                            let per_position = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
-                                (equity
-                                    * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.50))
-                                    / rust_decimal::Decimal::from(max_positions as u32))
-                                    .min(rust_decimal_macros::dec!(20)) // V2: $10-20 per position
-                            } else {
-                                (equity
-                                    * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
-                                    / rust_decimal::Decimal::from(max_positions as u32))
-                                    .min(rust_decimal_macros::dec!(5)) // Legacy: max $5 per meme coin position
-                            };
+                            // Calculate position size
                             let price = rust_decimal::Decimal::from_f64(token.price_usd).unwrap_or(rust_decimal_macros::dec!(0));
                             if price <= rust_decimal::Decimal::ZERO { continue; }
-                            let size = (per_position / price).round_dp(0);
+                            let (size, position_usd) = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                                // Kelly-based position sizing (compounds with equity)
+                                let position_usd = slot.kelly_position_size(price);
+                                // Convert USD to shares
+                                let sz = if price > rust_decimal::Decimal::ZERO {
+                                    (position_usd / price).round_dp(0)
+                                } else { continue };
+                                if sz <= rust_decimal::Decimal::ZERO { continue; }
+                                (sz, position_usd)
+                            } else {
+                                // Legacy: fixed fraction sizing, max $5 per meme coin position
+                                let equity = slot.wallet.equity();
+                                let per_position = (equity
+                                    * rust_decimal::Decimal::from_f64(capital_pct).unwrap_or(rust_decimal_macros::dec!(0.80))
+                                    / rust_decimal::Decimal::from(max_positions as u32))
+                                    .min(rust_decimal_macros::dec!(5));
+                                let sz = (per_position / price).round_dp(0);
+                                if sz <= rust_decimal::Decimal::ZERO { continue; }
+                                (sz, per_position)
+                            };
                             if size <= rust_decimal::Decimal::ZERO { continue; }
 
                             // Execute buy
@@ -1212,10 +1219,10 @@ async fn run_trading_loop(state: SharedState) {
                                         time_stop_hours: time_hours,
                                         thesis_invalidation: "Volume cliff or holder stalling — V2 exit system".into(),
                                         risk_per_trade_pct: 1.0,
-                                        risk_amount: per_position,
+                                        risk_amount: position_usd,
                                         reward_risk_ratio: target_mult,
                                         position_size: size,
-                                        max_loss: per_position,
+                                        max_loss: position_usd,
                                         strategy_tier: "Unproven".into(),
                                     },
                                 ));
@@ -1233,6 +1240,8 @@ async fn run_trading_loop(state: SharedState) {
                                         "volume_5m": token.volume_5m,
                                     }));
                                 }
+
+                                slot.wallet.add_gas_fee(rust_decimal_macros::dec!(0.151));
 
                                 tracing::info!(
                                     "MC V2 {} BUY {} {} @ {} | safety={}/100 vol5m=${:.0} mcap=${:.0} | {}",
@@ -1313,44 +1322,51 @@ async fn run_trading_loop(state: SharedState) {
                             let mins_held = (chrono::Utc::now() - *opened_at).num_minutes();
 
                             // V2 Exit Logic
-                            let (should_close, reason) = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
+                            let (should_close, reason, exit_type) = if strategy_type == "mc_trend_v2" || strategy_type == "mc_copy_v2" {
                                 // 1. Volume cliff (primary exit) — safe: disjoint field from strategy_manager
                                 let vol_exit = unsafe { (*volume_tracker).should_exit(token_id) };
                                 if let Some(exit_reason) = vol_exit {
-                                    (true, format!("VOLUME EXIT: {}", exit_reason))
+                                    (true, format!("VOLUME EXIT: {}", exit_reason), tradoshka_engine::ExitType::StopLoss)
                                 }
                                 // 2. Hard stop (-50% default, configurable)
                                 else if pnl_pct <= -(hard_stop_pct) {
-                                    (true, format!("HARD STOP: {:.0}% loss", pnl_pct))
+                                    (true, format!("HARD STOP: {:.0}% loss", pnl_pct), tradoshka_engine::ExitType::StopLoss)
                                 }
                                 // 3. Time limit
                                 else if time_limit_mins > 0 && mins_held >= time_limit_mins {
-                                    (true, format!("TIME LIMIT: {}min", mins_held))
+                                    (true, format!("TIME LIMIT: {}min", mins_held), tradoshka_engine::ExitType::TimeStop)
                                 }
                                 // 4. Profit ladder: sell at 2x
                                 else if pnl_pct >= 100.0 {
-                                    (true, format!("PROFIT LADDER: 2x reached ({:.0}%)", pnl_pct))
+                                    (true, format!("PROFIT LADDER: 2x reached ({:.0}%)", pnl_pct), tradoshka_engine::ExitType::TakeProfit)
                                 }
-                                else { (false, String::new()) }
+                                else { (false, String::new(), tradoshka_engine::ExitType::Manual) }
                             } else {
                                 // Legacy exit logic for non-V2 strategies
                                 let close = pnl_pct <= -15.0
                                     || (mins_held >= 15 && pnl_pct < 5.0)
                                     || pnl_pct >= 100.0
                                     || mins_held >= 60;
-                                let rsn = if pnl_pct <= -15.0 { "hard stop -15%".to_string() }
-                                    else if mins_held >= 60 { "max time 60min".to_string() }
-                                    else if pnl_pct >= 100.0 { "take profit 2x".to_string() }
-                                    else { "time stop 15min".to_string() };
-                                (close, rsn)
+                                let (rsn, et) = if pnl_pct <= -15.0 {
+                                    ("hard stop -15%".to_string(), tradoshka_engine::ExitType::StopLoss)
+                                } else if mins_held >= 60 {
+                                    ("max time 60min".to_string(), tradoshka_engine::ExitType::TimeStop)
+                                } else if pnl_pct >= 100.0 {
+                                    ("take profit 2x".to_string(), tradoshka_engine::ExitType::TakeProfit)
+                                } else {
+                                    ("time stop 15min".to_string(), tradoshka_engine::ExitType::TimeStop)
+                                };
+                                (close, rsn, et)
                             };
 
                             if should_close {
                                 let symbol = pos_key.split(':').next().unwrap_or(pos_key.as_str());
-                                if let Some((_, _, pnl)) = slot.wallet.sell(
+                                if let Some((_, _, pnl)) = slot.wallet.sell_with_exit_type(
                                     symbol, *current_price,
                                     rust_decimal::Decimal::MAX, slot_name,
+                                    exit_type,
                                 ) {
+                                    slot.wallet.add_gas_fee(rust_decimal_macros::dec!(0.151));
                                     slot.recorder.close_trade(symbol, slot_name, pnl);
                                     tracing::info!("MC V2 EXIT: {} | {} | {} | PnL: {:.1}% | held {}min",
                                         slot_name, symbol, reason, pnl_pct, mins_held);
