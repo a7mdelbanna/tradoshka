@@ -147,16 +147,24 @@ impl StrategySlot {
 
     /// Kelly-based position size in USD.
     /// Falls back to a fixed formula until 10+ closed trades are available.
+    /// Minimum $3 per position to keep gas fees under 10% of position value.
     pub fn kelly_position_size(&self, token_price: Decimal) -> Decimal {
         let equity = self.wallet.equity();
         if equity <= Decimal::ZERO || token_price <= Decimal::ZERO {
             return Decimal::ZERO;
         }
 
+        // Absolute minimum: $3 per trade (gas round-trip ~$0.30 = 10% of $3)
+        // If equity is too low to trade $3, return ZERO to skip trading
+        let abs_min = dec!(3);
+        if equity < dec!(10) {
+            return Decimal::ZERO; // Not enough equity to trade viably
+        }
+
         let closed_count = self.recorder.closed_trade_count();
 
         if closed_count < 10 {
-            // Fallback: fixed formula
+            // Fallback: fixed formula, capped at 5% of equity, floored at $3
             let capital_usage_pct = Decimal::try_from(self.params.get("capital_usage_pct")).unwrap_or(dec!(60));
             let auto_position_count = Decimal::try_from(self.params.get("auto_position_count")).unwrap_or(dec!(15));
             let auto_leverage = Decimal::try_from(self.params.get("auto_leverage")).unwrap_or(dec!(1));
@@ -164,9 +172,10 @@ impl StrategySlot {
             if auto_position_count <= Decimal::ZERO {
                 return Decimal::ZERO;
             }
-            // Cap at 5% of equity (same as Kelly max) to prevent over-sized positions
             let fallback = equity * (capital_usage_pct / dec!(100)) / auto_position_count * auto_leverage;
-            return fallback.min(equity * dec!(5) / dec!(100));
+            return fallback
+                .min(equity * dec!(5) / dec!(100))  // cap: 5% of equity
+                .max(abs_min);                       // floor: $3 minimum
         }
 
         // Half-Kelly calculation
@@ -174,25 +183,22 @@ impl StrategySlot {
         let wl_ratio = self.avg_win_loss_ratio();
 
         if wl_ratio <= 0.0 {
-            return (equity * dec!(5) / dec!(1000)).max(equity * dec!(5) / dec!(1000));
+            return abs_min; // No data → trade minimum viable size
         }
 
         let kelly = (wr * wl_ratio - (1.0 - wr)) / wl_ratio;
 
         if kelly <= 0.0 {
-            // Floor: 0.5% of equity
-            return equity * dec!(5) / dec!(1000);
+            return abs_min; // Negative Kelly → trade minimum viable size
         }
 
         let half_kelly = kelly / 2.0;
         let half_kelly_dec = Decimal::try_from(half_kelly).unwrap_or(dec!(0));
         let position_usd = equity * half_kelly_dec;
 
-        // Clamp: min 0.5%, max 5% of equity
-        let min_size = equity * dec!(5) / dec!(1000);
+        // Clamp: min $3, max 5% of equity
         let max_size = equity * dec!(5) / dec!(100);
-
-        position_usd.max(min_size).min(max_size)
+        position_usd.max(abs_min).min(max_size)
     }
 }
 
@@ -454,7 +460,8 @@ mod tests {
         let slot = StrategySlot::new("MC-TR-new", "meme_coins", params, dec!(100));
 
         let size = slot.kelly_position_size(dec!(0.001));
-        // Fallback formula: $100 * 60% / 15 * 5 = $20, but capped at 5% of equity = $5
+        // Fallback formula: $100 * 60% / 15 * 5 = $20, capped at 5% of equity = $5
+        // But $5 > $3 floor, so result = $5
         let expected = dec!(5); // 5% of $100 equity
         assert!((size - expected).abs() < dec!(1), "Before 10 trades, should use capped fallback. Got {} expected ~{}", size, expected);
     }
