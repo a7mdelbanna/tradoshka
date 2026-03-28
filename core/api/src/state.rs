@@ -46,6 +46,8 @@ pub struct AppState {
     pub copy_circuit_breaker: CopyCircuitBreaker,
     // Meme coin market adapter
     pub memecoins: MemeCoinAdapter,
+    // MC-V2 AI scorer
+    pub claude_scorer: tradoshka_engine::ClaudeScorer,
 }
 
 impl AppState {
@@ -84,6 +86,7 @@ impl AppState {
             copy_engine: CopyEngine::new(),
             copy_circuit_breaker: CopyCircuitBreaker::new(100.0), // $100 per strategy
             memecoins: MemeCoinAdapter::new(),
+            claude_scorer: tradoshka_engine::ClaudeScorer::new(),
         }
     }
 
