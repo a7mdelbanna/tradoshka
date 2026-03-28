@@ -21,6 +21,7 @@ struct SlotSnapshot {
     parent: Option<String>,
     open_positions: usize,
     fees: f64,
+    total_costs: f64,
     params: std::collections::HashMap<String, f64>,
 }
 
@@ -49,6 +50,7 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
                 parent: sl.parent.clone(),
                 open_positions: sl.wallet.open_position_count(),
                 fees: sl.wallet.total_fees().to_f64().unwrap_or(0.0),
+                total_costs: sl.wallet.total_costs().to_f64().unwrap_or(0.0),
                 params: sl.params.params.clone(),
             }
         }).collect();
@@ -74,6 +76,7 @@ pub async fn get_leaderboard(State(state): State<SharedState>) -> Json<serde_jso
                 "balance": r.balance,
                 "open_positions": r.open_positions,
                 "fees": r.fees,
+                "total_costs": r.total_costs,
                 "win_rate": r.win_rate,
                 "trades": r.trades,
                 "age_hours": r.age_hours,
@@ -251,6 +254,13 @@ pub async fn get_strategy_wallet(
                 "unrealized_pnl": p.unrealized_pnl.to_string(),
             })).collect();
 
+            let gross_pnl = slot.wallet.realized_pnl() + slot.wallet.total_costs();
+            let cost_pct = {
+                let gross = gross_pnl.to_f64().unwrap_or(0.0);
+                if gross > 0.0 {
+                    (slot.wallet.total_costs().to_f64().unwrap_or(0.0) / gross * 100.0 * 100.0).round() / 100.0
+                } else { 0.0 }
+            };
             Json(serde_json::json!({
                 "name": slot.name,
                 "market": slot.market,
@@ -262,6 +272,13 @@ pub async fn get_strategy_wallet(
                 "unrealized_pnl": slot.wallet.unrealized_pnl().to_string(),
                 "realized_pnl": slot.wallet.realized_pnl().to_string(),
                 "total_fees": slot.wallet.total_fees().to_string(),
+                "trading_fees": slot.wallet.trading_fees_total().to_string(),
+                "entry_slippage": slot.wallet.entry_slippage_total().to_string(),
+                "exit_slippage": slot.wallet.exit_slippage_total().to_string(),
+                "gas_fees": slot.wallet.gas_fees_total().to_string(),
+                "total_costs": slot.wallet.total_costs().to_string(),
+                "gross_pnl": gross_pnl.to_string(),
+                "cost_pct": cost_pct,
                 "drawdown_pct": slot.wallet.drawdown_pct().to_string(),
                 "pnl": format!("{:.2}", slot.pnl_pct()),
                 "trades": slot.trade_count(),
