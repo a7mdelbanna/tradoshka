@@ -27,7 +27,7 @@ pub use order_manager::OrderManager;
 pub use portfolio::PortfolioTracker;
 pub use dry_mode::DryModeEngine;
 pub use trade_recorder::{TradeRecorder, TradeRecord};
-pub use wallet::{SimulatedWallet, WalletPosition, WalletMode};
+pub use wallet::{SimulatedWallet, WalletPosition, WalletMode, ExitType};
 pub use readiness::{ReadinessScorer, ReadinessReport, ReadinessCriterion};
 pub use market_data::{MarketDataService, MarketDataConfig, TrackedMarket};
 pub use orchestrator::{Orchestrator, OrchestratorConfig, CycleResult};

@@ -5,6 +5,31 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tradoshka_common::types::OrderSide;
 
+/// Reason for exiting a position — drives asymmetric slippage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExitType {
+    /// Panic exit; market impact is highest.
+    StopLoss,
+    /// Passive limit-like exit; market impact is lowest.
+    TakeProfit,
+    /// Time-based expiry; moderate market impact.
+    TimeStop,
+    /// Human-initiated exit; moderate market impact.
+    Manual,
+}
+
+impl ExitType {
+    /// Slippage in basis points that should be subtracted from the fill price on exit.
+    pub fn slippage_bps(self) -> Decimal {
+        match self {
+            ExitType::StopLoss   => Decimal::new(250, 0),
+            ExitType::TakeProfit => Decimal::new(75,  0),
+            ExitType::TimeStop   => Decimal::new(150, 0),
+            ExitType::Manual     => Decimal::new(100, 0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletPosition {
     pub token_id: String,
@@ -48,6 +73,12 @@ pub struct SimulatedWallet {
     total_fees: Decimal,
     realized_pnl: Decimal,
     fee_rate: Decimal,
+    /// Sum of all entry-side slippage costs (buy fills above market price).
+    entry_slippage_total: Decimal,
+    /// Sum of all exit-side slippage costs (sell fills below market price).
+    exit_slippage_total: Decimal,
+    /// Sum of all on-chain / network gas fees paid.
+    gas_fees_total: Decimal,
 }
 
 impl Default for SimulatedWallet {
@@ -68,6 +99,9 @@ impl SimulatedWallet {
             total_fees: Decimal::ZERO,
             realized_pnl: Decimal::ZERO,
             fee_rate,
+            entry_slippage_total: Decimal::ZERO,
+            exit_slippage_total: Decimal::ZERO,
+            gas_fees_total: Decimal::ZERO,
         }
     }
 
@@ -98,6 +132,37 @@ impl SimulatedWallet {
 
     pub fn total_fees(&self) -> Decimal {
         self.total_fees
+    }
+
+    // ── Granular cost accessors ────────────────────────────────────────────────
+
+    pub fn entry_slippage_total(&self) -> Decimal {
+        self.entry_slippage_total
+    }
+
+    pub fn exit_slippage_total(&self) -> Decimal {
+        self.exit_slippage_total
+    }
+
+    pub fn gas_fees_total(&self) -> Decimal {
+        self.gas_fees_total
+    }
+
+    /// Alias for `total_fees()` — trading/exchange fees charged on fills.
+    pub fn trading_fees_total(&self) -> Decimal {
+        self.total_fees
+    }
+
+    /// Sum of all four cost buckets: entry slippage + exit slippage + trading fees + gas fees.
+    pub fn total_costs(&self) -> Decimal {
+        self.entry_slippage_total + self.exit_slippage_total + self.total_fees + self.gas_fees_total
+    }
+
+    /// Deduct a gas fee from the balance and record it in `gas_fees_total`.
+    pub fn add_gas_fee(&mut self, amount: Decimal) {
+        let amount = amount.abs();
+        self.balance -= amount;
+        self.gas_fees_total += amount;
     }
 
     pub fn drawdown_pct(&self) -> Decimal {
@@ -147,6 +212,7 @@ impl SimulatedWallet {
         strategy_id: &str,
     ) -> Option<(Decimal, Decimal, Decimal)> {
         let fill_price = self.apply_slippage(market_price, OrderSide::Buy);
+        let slippage_cost = fill_price - market_price; // positive = price moved against us
         let cost = fill_price * shares;
         let fee = self.calculate_fee(fill_price, shares);
         let total_cost = cost + fee;
@@ -157,6 +223,7 @@ impl SimulatedWallet {
 
         self.balance -= total_cost;
         self.total_fees += fee;
+        self.entry_slippage_total += (slippage_cost * shares).abs();
 
         let key = format!("{}:{}", token_id, strategy_id);
 
@@ -205,6 +272,51 @@ impl SimulatedWallet {
         self.balance += revenue - fee;
         self.total_fees += fee;
         self.realized_pnl += pnl;
+
+        // Update or remove position
+        let remaining = pos.shares - sell_shares;
+        if remaining <= Decimal::ZERO {
+            self.positions.remove(&key);
+        } else {
+            let pos = self.positions.get_mut(&key).unwrap();
+            pos.shares = remaining;
+            pos.update_price(market_price);
+        }
+
+        self.update_peak();
+        Some((fill_price, fee, pnl))
+    }
+
+    /// Sell/close a position with an explicit exit type for asymmetric slippage.
+    /// Returns (fill_price, fee, pnl) or None if no position.
+    /// The exit-type slippage is applied on top of (replacing) the generic sell slippage.
+    pub fn sell_with_exit_type(
+        &mut self,
+        token_id: &str,
+        market_price: Decimal,
+        shares: Decimal,
+        strategy_id: &str,
+        exit_type: ExitType,
+    ) -> Option<(Decimal, Decimal, Decimal)> {
+        let key = format!("{}:{}", token_id, strategy_id);
+        let pos = self.positions.get(&key)?;
+
+        let sell_shares = shares.min(pos.shares);
+
+        // Apply exit-type-specific slippage (deducted from market price)
+        let exit_slippage = exit_type.slippage_bps() / Decimal::new(10000, 0);
+        let fill_price = market_price * (Decimal::ONE - exit_slippage);
+
+        let slippage_cost = (market_price - fill_price) * sell_shares; // always positive
+
+        let revenue = fill_price * sell_shares;
+        let fee = self.calculate_fee(fill_price, sell_shares);
+        let pnl = (fill_price - pos.avg_price) * sell_shares - fee;
+
+        self.balance += revenue - fee;
+        self.total_fees += fee;
+        self.realized_pnl += pnl;
+        self.exit_slippage_total += slippage_cost.abs();
 
         // Update or remove position
         let remaining = pos.shares - sell_shares;
@@ -396,5 +508,50 @@ mod tests {
         assert!(fee > dec!(0), "Fee must be positive for crypto high-price trades");
         // 0.001 * 600 * 1 = 0.6
         assert_eq!(fee, dec!(0.6));
+    }
+
+    #[test]
+    fn test_cost_tracking_separate_buckets() {
+        let mut w = SimulatedWallet::new(dec!(100), dec!(100), dec!(0.003));
+        w.buy("tok1", "Test", "Long", dec!(0.001), dec!(10000), "strat1");
+        assert!(w.entry_slippage_total() > Decimal::ZERO, "entry slippage should be tracked");
+        assert!(w.trading_fees_total() > Decimal::ZERO, "trading fees should be tracked");
+        assert_eq!(w.exit_slippage_total(), Decimal::ZERO, "no exit slippage yet");
+        assert_eq!(w.gas_fees_total(), Decimal::ZERO, "gas fees not yet implemented here");
+    }
+
+    #[test]
+    fn test_exit_slippage_applied_on_sell() {
+        let mut w = SimulatedWallet::new(dec!(100), dec!(100), dec!(0.003));
+        w.buy("tok1", "Test", "Long", dec!(1.00), dec!(10), "strat1");
+        let result = w.sell_with_exit_type("tok1", dec!(1.00), dec!(10), "strat1", ExitType::StopLoss);
+        assert!(result.is_some());
+        let (fill_price, _, _) = result.unwrap();
+        assert!(fill_price < dec!(1.00), "stop loss exit should have negative slippage");
+        assert!(w.exit_slippage_total() > Decimal::ZERO, "exit slippage should be tracked");
+    }
+
+    #[test]
+    fn test_exit_slippage_asymmetric() {
+        let mut w1 = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.003));
+        w1.buy("t1", "Q", "Long", dec!(100.0), dec!(1), "s1");
+        let sl_result = w1.sell_with_exit_type("t1", dec!(100.0), dec!(1), "s1", ExitType::StopLoss);
+        let sl_fill = sl_result.unwrap().0;
+
+        let mut w2 = SimulatedWallet::new(dec!(1000), dec!(0), dec!(0.003));
+        w2.buy("t1", "Q", "Long", dec!(100.0), dec!(1), "s2");
+        let tp_result = w2.sell_with_exit_type("t1", dec!(100.0), dec!(1), "s2", ExitType::TakeProfit);
+        let tp_fill = tp_result.unwrap().0;
+
+        assert!(sl_fill < tp_fill, "SL fill {} should be worse than TP fill {}", sl_fill, tp_fill);
+    }
+
+    #[test]
+    fn test_gas_fee_tracking() {
+        let mut w = SimulatedWallet::new(dec!(100), dec!(100), dec!(0.003));
+        w.add_gas_fee(dec!(0.151));
+        w.add_gas_fee(dec!(0.151));
+        assert_eq!(w.gas_fees_total(), dec!(0.302));
+        assert!(w.balance() < dec!(100));
     }
 }
