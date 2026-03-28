@@ -334,7 +334,7 @@ function TradingContent() {
                     <option value="">All Strategies (aggregated)</option>
                     {marketStrategies.map((s: any) => (
                       <option key={s.name ?? s.id} value={s.name ?? s.id}>
-                        {s.name ?? s.id} — ${((s.total_pnl ?? s.pnl ?? 0)).toFixed(2)} ({s.trades ?? 0} trades)
+                        {s.name ?? s.id} — ${((s.total_pnl ?? s.pnl ?? 0)).toFixed(2)} ({s.trades ?? 0} trades) | Costs: ${(s.total_costs ?? 0).toFixed(2)}
                       </option>
                     ))}
                   </select>
@@ -395,6 +395,46 @@ function TradingContent() {
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* Trading Costs Breakdown */}
+              {activeWallet && selectedStrategy && (
+                <div className="mt-4 p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Trading Costs</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-slate-500">Trading Fees</span>
+                      <p className="text-slate-200 font-mono">${parseFloat(strategyWallet?.trading_fees || '0').toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Entry Slippage</span>
+                      <p className="text-slate-200 font-mono">${parseFloat(strategyWallet?.entry_slippage || '0').toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Exit Slippage</span>
+                      <p className="text-slate-200 font-mono">${parseFloat(strategyWallet?.exit_slippage || '0').toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Gas Fees</span>
+                      <p className="text-slate-200 font-mono">${parseFloat(strategyWallet?.gas_fees || '0').toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-slate-700/50 flex justify-between items-center">
+                    <div>
+                      <span className="text-slate-500 text-sm">Total Costs</span>
+                      <p className="text-white font-semibold font-mono">${parseFloat(strategyWallet?.total_costs || '0').toFixed(2)}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-500 text-sm">Cost / Gross PnL</span>
+                      <p className={`font-semibold font-mono ${
+                        (strategyWallet?.cost_pct ?? 0) < 20 ? 'text-emerald-400' :
+                        (strategyWallet?.cost_pct ?? 0) < 40 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {(strategyWallet?.cost_pct ?? 0).toFixed(1)}%
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
