@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(report.hour, 1);
         assert_eq!(report.killed.len(), 0);
         assert_eq!(report.spawned.len(), 0);
-        assert_eq!(report.alive_count, 160);
+        assert_eq!(report.alive_count, 200);
     }
 
     #[test]
@@ -302,9 +302,9 @@ mod tests {
         engine.min_trades_for_ranking = 0; // Rank even with 0 trades
         let mut mgr = setup_manager();
         let report = engine.evolve(&mut mgr);
-        // 160 strategies, bottom 10% = 16 killed per market group, some spawned
+        // 200 strategies, bottom 10% killed per market group, some spawned
         assert!(report.killed.len() >= 1);
-        assert!(report.alive_count < 162); // Some killed, some spawned
+        assert!(report.alive_count < 202); // Some killed, some spawned
     }
 
     #[test]
@@ -320,11 +320,11 @@ mod tests {
     fn test_evolve_respects_min_alive() {
         let mut engine = EvolutionEngine::new();
         engine.min_trades_for_ranking = 0;
-        let mut mgr = StrategyWalletManager::new(200, 155, dec!(100)); // min_alive = 155
-        mgr.initialize_defaults(); // 160 alive
-        // Can only kill 5 (160 - 155 = 5 buffer)
+        let mut mgr = StrategyWalletManager::new(200, 195, dec!(100)); // min_alive = 195
+        mgr.initialize_defaults(); // 200 alive
+        // Can only kill 5 (200 - 195 = 5 buffer)
         let report = engine.evolve(&mut mgr);
-        assert!(mgr.alive_count() >= 115);
+        assert!(mgr.alive_count() >= 155);
     }
 
     #[test]
