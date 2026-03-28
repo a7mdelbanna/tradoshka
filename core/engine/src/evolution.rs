@@ -59,7 +59,7 @@ impl EvolutionEngine {
         let mut all_spawned = Vec::new();
 
         // Run evolution separately per market
-        for market_prefix in &["PM-", "CS-", "CP-", "MC-"] {
+        for market_prefix in &["PM-", "CS-", "CP-", "MC2-", "MC-"] {
             let (killed, spawned) = self.evolve_market(manager, market_prefix);
             all_killed.extend(killed);
             all_spawned.extend(spawned);
