@@ -115,6 +115,83 @@ impl StrategySlot {
         self.killed_at = Some(Utc::now());
         self.cause_of_death = Some(reason.into());
     }
+
+    /// Average win / average loss ratio from closed trades.
+    /// Returns 0.0 if there are no wins or no losses.
+    pub fn avg_win_loss_ratio(&self) -> f64 {
+        let trades = self.recorder.all_trades();
+
+        let wins: Vec<f64> = trades
+            .iter()
+            .filter(|t| t.is_closed && t.pnl.map_or(false, |p| p > Decimal::ZERO))
+            .filter_map(|t| t.pnl)
+            .map(|p| p.to_f64().unwrap_or(0.0).abs())
+            .collect();
+
+        let losses: Vec<f64> = trades
+            .iter()
+            .filter(|t| t.is_closed && t.pnl.map_or(false, |p| p < Decimal::ZERO))
+            .filter_map(|t| t.pnl)
+            .map(|p| p.to_f64().unwrap_or(0.0).abs())
+            .collect();
+
+        if wins.is_empty() || losses.is_empty() {
+            return 0.0;
+        }
+
+        let avg_win = wins.iter().sum::<f64>() / wins.len() as f64;
+        let avg_loss = losses.iter().sum::<f64>() / losses.len() as f64;
+
+        avg_win / avg_loss
+    }
+
+    /// Kelly-based position size in USD.
+    /// Falls back to a fixed formula until 10+ closed trades are available.
+    pub fn kelly_position_size(&self, token_price: Decimal) -> Decimal {
+        let equity = self.wallet.equity();
+        if equity <= Decimal::ZERO || token_price <= Decimal::ZERO {
+            return Decimal::ZERO;
+        }
+
+        let closed_count = self.recorder.closed_trade_count();
+
+        if closed_count < 10 {
+            // Fallback: fixed formula
+            let capital_usage_pct = Decimal::try_from(self.params.get("capital_usage_pct")).unwrap_or(dec!(60));
+            let auto_position_count = Decimal::try_from(self.params.get("auto_position_count")).unwrap_or(dec!(15));
+            let auto_leverage = Decimal::try_from(self.params.get("auto_leverage")).unwrap_or(dec!(1));
+
+            if auto_position_count <= Decimal::ZERO {
+                return Decimal::ZERO;
+            }
+            return equity * (capital_usage_pct / dec!(100)) / auto_position_count * auto_leverage;
+        }
+
+        // Half-Kelly calculation
+        let wr = self.win_rate();
+        let wl_ratio = self.avg_win_loss_ratio();
+
+        if wl_ratio <= 0.0 {
+            return (equity * dec!(5) / dec!(1000)).max(equity * dec!(5) / dec!(1000));
+        }
+
+        let kelly = (wr * wl_ratio - (1.0 - wr)) / wl_ratio;
+
+        if kelly <= 0.0 {
+            // Floor: 0.5% of equity
+            return equity * dec!(5) / dec!(1000);
+        }
+
+        let half_kelly = kelly / 2.0;
+        let half_kelly_dec = Decimal::try_from(half_kelly).unwrap_or(dec!(0));
+        let position_usd = equity * half_kelly_dec;
+
+        // Clamp: min 0.5%, max 5% of equity
+        let min_size = equity * dec!(5) / dec!(1000);
+        let max_size = equity * dec!(5) / dec!(100);
+
+        position_usd.max(min_size).min(max_size)
+    }
 }
 
 use rust_decimal::prelude::*;
@@ -318,5 +395,64 @@ mod tests {
             .with_parent("CS-momentum-fast", 2);
         assert_eq!(slot.parent, Some("CS-momentum-fast".into()));
         assert_eq!(slot.generation, 2);
+    }
+
+    #[test]
+    fn test_kelly_position_size_with_history() {
+        let params = StrategyParams::new("mc_trend_v2")
+            .with_param("auto_position_count", 15.0)
+            .with_param("capital_usage_pct", 60.0)
+            .with_param("auto_leverage", 5.0);
+        let mut slot = StrategySlot::new("MC-TR-test", "meme_coins", params, dec!(1000));
+
+        for i in 0..20u32 {
+            let pnl = if i < 8 { dec!(10) } else { dec!(-5) };
+            let trade = crate::trade_recorder::TradeRecord {
+                id: format!("t{}", i),
+                timestamp: chrono::Utc::now(),
+                market: tradoshka_common::types::Market::Crypto,
+                symbol: format!("tok{}", i),
+                market_question: "test".into(),
+                direction: "Long".into(),
+                side: tradoshka_common::types::OrderSide::Buy,
+                shares: dec!(100),
+                price: dec!(1.0),
+                fee: dec!(0.01),
+                strategy_id: "MC-TR-test".into(),
+                signal_strength: 0.0,
+                edge_vs_market: 0.0,
+                pnl: Some(pnl),
+                is_closed: true,
+                thesis_reasoning: String::new(),
+                stop_loss: dec!(0.80),
+                trailing_stop: dec!(0.90),
+                take_profit: dec!(1.20),
+                time_stop_hours: 1,
+                thesis_invalidation: String::new(),
+                risk_amount: dec!(5.0),
+                reward_risk_ratio: 2.0,
+                strategy_tier: "Unproven".into(),
+                close_reason: None,
+            };
+            slot.recorder.record(trade);
+        }
+
+        let size = slot.kelly_position_size(dec!(1.0));
+        assert!(size > Decimal::ZERO, "Kelly should produce positive size");
+        assert!(size <= dec!(50), "Size should be capped at 5% of equity: got {}", size);
+        assert!(size >= dec!(5), "Size should be at least 0.5% of equity: got {}", size);
+    }
+
+    #[test]
+    fn test_kelly_falls_back_before_10_trades() {
+        let params = StrategyParams::new("mc_trend_v2")
+            .with_param("auto_position_count", 15.0)
+            .with_param("capital_usage_pct", 60.0)
+            .with_param("auto_leverage", 5.0);
+        let slot = StrategySlot::new("MC-TR-new", "meme_coins", params, dec!(100));
+
+        let size = slot.kelly_position_size(dec!(0.001));
+        let expected = dec!(100) * dec!(0.60) / dec!(15) * dec!(5);
+        assert!((size - expected).abs() < dec!(1), "Before 10 trades, should use fixed formula. Got {} expected ~{}", size, expected);
     }
 }
